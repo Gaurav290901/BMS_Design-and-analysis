@@ -1,0 +1,1146 @@
+                                                                                                                 Equivalent Circuit Cell Model Simulation
+
+                                                                                                                                                       Octave Code
+Simulating The Cell Using Open Circuit Voltage only...
+
+For Static Test.
+
+% ------------------------------------------------------------------------------
+% function processOCV
+%PROCESSOCV assumes that specific cell test scripts have been run to generate
+% the input data structure having fields for time , step , current , voltage , chgAh
+% and disAh for each script run. The results from four scripts are required at  every temperature. 
+
+%The steps in each script file are assumed to be:
+
+% Script 1 (thermal chamber set to test temperature):
+
+% Step 1: Rest @ 100% SOC to acclimatize to test temperature
+% Step 2: Discharge @ low rate (ca. C/30) to min voltage
+% Step 3: Rest ca. 0%
+
+% Script 2 (thermal chamber set to 25 degC):
+
+% Step 1: Rest ca. 0% SOC to acclimatize to 25 degC
+% Step 2: Discharge to min voltage (ca. C/3)
+% Step 3: Rest
+% Step 4: Const voltage at vmin until current small (ca. C/30)
+% Steps 5-7: Dither around vmin
+% Step 8: Rest
+% Step 9: Constant voltage at vmin for 15 min
+% Step 10: Rest
+
+% Script 3 (thermal chamber set to test temperature):
+
+% Step 1: Rest at 0% SOC to acclimatize to test temp
+% Step 2: Charge @ low rate (ca. C/30) to max voltage
+% Step 3: Rest
+
+% Script 4 (thermal chamber set to 25 degC):
+
+% Step 1: Rest ca. 100% SOC to acclimatize to 25 degC
+% Step 2: Charge to max voltage (ca. C/3)
+% Step 3: Rest
+% Step 4: Const voltage at vmax until current small (ca. C/30)
+% Steps 5-7: Dither around vmax
+% Step 8: Rest
+% Step 9: Constant voltage at vmax for 15 min
+% Step 10: Rest
+
+%All other steps (if present) are ignored by PROCESSOCV. The time
+% step between data samples is not critical since the Arbin
+% integrates ampere -hours to produce the two Ah columns , and this
+% is what is necessary to generate the OCV curves. The rest steps
+% must contain at least one data point each.
+
+%PROCESS OCV
+
+function model=processOCV(data ,cellID)
+filetemps = [data.temp ];
+filetemps = filetemps (:);
+numtemps = length(filetemps);
+ind25 = find(filetemps == 25);
+if isempty(ind25),
+error('Must have a test at 25 degC ');
+end
+
+not25 = find(filetemps ~= 25);
+data25 = data(ind25);
+
+% Compute total dis/charge ampere hours
+
+totDisAh = data25.script1.disAh(end) + data25.script2.disAh(end) + data25.script3.disAh(end) + data25.script4.disAh(end);
+totChgAh = data25.script1.chgAh(end) + data25.script2.chgAh(end) + data25.script3.chgAh(end) + data25.script4.chgAh(end);
+
+eta25 = totDisAh/totChgAh;                                                              %Efficency.
+
+data25.script1.chgAh = data25.script1.chgAh*eta25;
+data25.script2.chgAh = data25.script2.chgAh*eta25;
+data25.script3.chgAh = data25.script3.chgAh*eta25;
+data25.script4.chgAh = data25.script4.chgAh*eta25;
+
+Q25 = data25.script1.disAh(end)+data25.script2.disAh(end) - data25.script1.chgAh(end)-data25.script2.chgAh(end);
+
+indD = find(data25.script1.step == 2);                                                                                                                                                                                                                                     % Slow discharge step
+IR1Da = data25.script1.voltage(indD (1) -1) - data25.script1.voltage(indD (1));                                                                                                                                              % At beginning of discharge step
+IR2Da = data25.script1.voltage(indD(end)+1) - data25.script1.voltage(indD(end));                                                                                                                                    % At end of discharge step
+indC = find(data25.script3.step == 2);                                                                                                                                                                                                                                      % Slow charge step
+IR1Ca = data25.script3.voltage(indC (1)) - data25.script3.voltage(indC (1) -1);                                                                                                                                                % At beginning of charge step
+IR2Ca = data25.script3.voltage(indC(end)) - data25.script3.voltage(indC(end)+1);                                                                                                                                      % At end of charge step
+
+IR1D = min(IR1Da ,2* IR2Ca); IR2D = min(IR2Da ,2* IR1Ca);                                                                                                                                                                                        % Limit discharge delta V
+IR1C = min(IR1Ca ,2* IR2Da); IR2C = min(IR2Ca ,2* IR1Da);                                                                                                                                                                                          % Limit charge delta V
+
+blend = (0:length(indD) -1)/(length(indD) -1);
+IRblend = IR1D + (IR2D -IR1D)*blend (:);
+disV = data(k).script1.voltage(indD) + IRblend;
+disZ = 1 - data25.script1.disAh(indD)/Q25;
+disZ = disZ + (1 - disZ (1));                                                                                                                                                                                                                                                                % force initial 100% SOC
+blend = (0:length(indC) -1)/(length(indC) -1);
+IRblend = IR1C + (IR2C -IR1C)*blend (:);
+chgV = data25.script3.voltage(indC) - IRblend;
+chgZ = data25.script3.chgAh(indC)/Q25;
+chgZ = chgZ - chgZ (1); % force initial 0% SOC
+
+deltaV50 = interp1(chgZ ,chgV ,0.5) - interp1(disZ ,disV ,0.5);
+ind = find(chgZ < 0.5);
+vChg = chgV(ind) - chgZ(ind)*deltaV50;
+zChg = chgZ(ind);
+ind = find(disZ > 0.5);
+vDis = flipud(disV(ind) + (1 - disZ(ind))*deltaV50);
+zDis = flipud(disZ(ind));
+rawocv = interp1 ([ zChg; zDis],[vChg; vDis],SOC ,'linear ','extrap ');
+filedata(ind25).rawocv = rawocv;
+filedata(ind25).temp = data25.temp;
+
+% Compiling voltages and temperatures into arrays rather than a structure
+
+Vraw = []; temps = [];
+for k = 1:numtemps ,
+if filedata(k).temp > 0,
+Vraw = [Vraw; filedata(k).rawocv ]; %#ok <AGROW >
+temps = [temps; filedata(k).temp ]; %#ok <AGROW >
+end
+end
+
+% Performing least -squares fit of model to data
+
+X = [ones(size(temps)), temps] \ Vraw;
+model.OCV0 = X(1 ,:);
+model.OCVrel = X(2 ,:);
+model.SOC = SOC;
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%For Dynamic test on OCV
+
+% --------------------------------------------------------------------
+% function processDynamic
+%%
+PROCESSDYNAMIC assumes that specific cell test scripts have been run to gen -
+% erate the input data structure having fields for time , step , current , voltage ,
+% chgAh , and disAh for each script run. The results from three scripts are
+% required at every temperature. The steps in each script file are assumed to be:
+% Script 1 (thermal chamber set to test temperature):
+% Step 1: Rest @ 100% SOC to acclimatize to test temperature
+% Step 2: Discharge @ 1C to reach ca. 90% SOC
+% Step 3: Repeatedly execute dynamic profiles (and possibly
+% intermediate rests) until SOC is around 10%
+% Script 2 (thermal chamber set to 25 degC):
+% Step 1: Rest ca. 10% SOC to acclimatize to 25 degC
+% Step 2: Discharge to min voltage (ca. C/3)
+% Step 3: Rest
+% Step 4: Constant voltage at vmin until current small (ca. C/30)
+% Steps 5-7: Dither around vmin
+% Step 8: Rest
+% Script 3 (thermal chamber set to 25 degC):
+% Step 2: Charge @ 1C to max voltage
+% Step 3: Rest
+% Step 4: Constant voltage at vmax until current small (ca. C/30)
+% Steps 5-7: Dither around vmax
+% Step 8: Rest
+% All other steps (if present) are ignored by PROCESSDYNAMIC. The time step
+% between data samples must be uniform --we assume a 1s sample period in this code
+
+The inputs:
+% - data: An array , with one entry per temperature to be processed.
+% One of the array entries must be at 25 degC. The fields of
+% "data" are: temp (the test temperature), script1 ,
+% script 2, and script 3, where the latter comprise data
+% collected from each script. The sub -fields of these script
+% structures that are used by PROCESSDYNAMIC are the vectors:
+% current , voltage , chgAh , and disAh
+% - model: The output from processOCV , comprising the OCV model
+% - numpoles: The number of R-C pairs in the model
+% - doHyst: 0 if no hysteresis model desired; 1 if hysteresis desired
+% The output:
+% - model: A modified model , which now contains the dynamic
+% fields filled in.
+function model = processDynamic(data ,model ,numpoles ,doHyst)
+global bestcost
+% used by fminbnd later on
+options=optimset('TolX ',1e-8,'TolFun ',1e-8,'MaxFunEval ' ,100000 , ...
+'MaxIter ',1e6 ,'Jacobian ','Off'); % for later optimization
+% ------------------------------------------------------------------
+% Step 1: Determine coulombic efficiency and capacity
+% ------------------------------------------------------------------
+% Code omitted here. See Lesson 2.2.5 for similar code + description
+% ------------------------------------------------------------------
+% Step 2: Compute OCV for "discharge portion" of test
+% ------------------------------------------------------------------
+for k = 1:length(data),
+etaParam = model.etaParam(k); % retrieve eta for this test
+etaik = data(k).script1.current; % modify current using eta
+etaik(etaik <0)= etaParam*etaik(etaik <0);
+data(k).Z = 1 - cumsum ([0, etaik (1:end -1)]) *1/( data(k).Q*3600); % SOC
+data(k).OCV = OCVfromSOCtemp(data(k).Z(:),alltemps(k),model); % OCV
+end % OCV is actually subtracted from voltage later on...
+% ------------------------------------------------------------------
+% Step 3: Set up optimization , optimize!
+% ------------------------------------------------------------------
+
+model.GParam = NaN(1, numTemps);                                                                                                                                                                                                                 % "gamma" hysteresis parameter
+model.M0Param = NaN(1, numTemps);                                                                                                                                                                                                             % "M0" hysteresis parameter
+model.MParam = NaN(1, numTemps);                                                                                                                                                                                                                % "M" hysteresis parameter
+model.R0Param = NaN(1, numTemps);                                                                                                                                                                                                               % "R0" ohmic resistance parameter
+model.RCParam = NaN(numTemps ,numpoles);                                                                                                                                                                                            % time const.
+model.RParam = NaN(numTemps ,numpoles);                                                                                                                                                                                               % Rk
+
+for theTemp = 1:numTemps ,
+fprintf('Processing temperature %d\n',model.temps(theTemp));
+bestcost = Inf;
+
+if doHyst ,
+
+model.GParam(theTemp) = abs(fminbnd(@(x) optfn(x,data ,model ,model.temps(theTemp) ,doHyst) ,1,250,options));
+
+else
+
+model.GParam(theTemp) = 0; theGParam = 0;
+
+% call optfn to display plots , if desired
+
+optfn(theGParam ,data ,model ,model.temps(theTemp),doHyst);
+
+end
+
+% set final model fields
+
+[~,model] = minfn(data ,model ,model.temps(theTemp),doHyst);
+end
+return                                                                                                                                                                                                                                                                                          % from processDynamic
+
+% This function has the correct syntax to be invoked by fminbnd.m to optimize
+% the model parameter values (esp. gamma), returning the rms model error "cost"
+
+function cost=optfn(theGParam ,data ,model ,theTemp ,doHyst)
+global bestcost
+model.GParam(model.temps == theTemp) = abs(theGParam);
+[cost ,model] = minfn(data ,model ,theTemp ,doHyst);
+if cost <bestcost ,
+bestcost = cost;
+disp('Best ESC model values yet!');
+end
+return
+
+% --------------------------------------------------------------------
+% Using an assumed value for gamma (already stored in the model), find
+% optimum values for remaining cell parameters , and compute the RMS
+% error between true and predicted cell voltage
+% --------------------------------------------------------------------
+
+function [cost ,model ]= minfn(data ,model ,theTemp ,doHyst)
+alltemps = [data (:).temp ];
+ind = find(alltemps == theTemp); numfiles = length(ind);
+rmserr = zeros(1, numfiles);
+G = abs(getParamESC('GParam ',theTemp ,model));
+Q = abs(getParamESC('QParam ',theTemp ,model));
+eta = abs(getParamESC('etaParam ',theTemp ,model));
+RC = getParamESC('RCParam ',theTemp ,model);
+numpoles = length(RC);
+
+for thefile = 1:numfiles;
+ik = data(ind(thefile)).script1.current (:);
+vk = data(ind(thefile)).script1.voltage (:);
+tk = (1:length(vk)) -1;
+etaik = ik; etaik(ik <0) = etaik(ik <0)*eta;
+h=0*ik; sik = 0*ik;
+fac=exp(-abs(G*etaik /(3600*Q)));
+for k=2: length(ik),
+h(k)=fac(k-1)*h(k-1) -(1-fac(k-1))*sign(ik(k-1));
+sik(k) = sign(ik(k));
+if abs(ik(k))<Q/100, sik(k) = sik(k-1); end
+end
+
+% First modeling step: Compute error with model = OCV only
+
+vest1 = data(ind(thefile)).OCV; verr = vk - vest1;
+
+% Second modeling step: Compute time constants in "A" matrix
+
+A = SISOsubid(-diff(verr),diff(etaik),numpoles);
+
+% modify results to ensure real , preferably distinct , between 0 and 1
+
+eigA = eig(A); eigAr = eigA + 0.001*randn(size(eigA));
+eigA(eigA ~= conj(eigA)) = abs(eigAr(eigA ~= conj(eigA)));
+eigA(eigA <0) = abs(eigA(eigA <0)); eigA(eigA >1) = 1./ eigA(eigA >1);
+RCfact = sort(eigA); RCfact = RCfact(end -numpoles +1: end);
+RC = -1./log(RCfact);
+
+% Simulate the R-C filters to find R-C currents
+
+vrcRaw = dlsim(diag(RCfact),1-RCfact ,eye(numpoles),zeros(numpoles ,1),etaik)
+
+% Third modeling step: Hysteresis parameters
+
+if doHyst ,
+H = [h,sik ,-etaik ,-vrcRaw ];
+W = lsqnonneg(H,verr); % or , W = H\verr;
+M = W(1); M0 = W(2); R0 = W(3); Rfact = W(4: end) ';
+else
+H = [-etaik ,-vrcRaw ];
+W = H\verr;
+M=0; M0=0; R0 = W(1); Rfact = W(2: end) ';
+end
+
+ind = find(model.temps == data(ind(thefile)).temp ,1);
+model.M0Param(ind) = M0; model.MParam(ind) = M;
+model.RCParam(ind ,:) = RC '; model.RParam(ind ,:) = Rfact ';
+model.R0Param(ind) = R0;
+vest2 = vest1 + M*h + M0*sik - R0*etaik - vrcRaw*Rfact ';
+verr = vk - vest2;
+
+% Compute RMS error only on data roughly in 5% to 95% SOC
+
+v1 = OCVfromSOCtemp (0.95 , data(ind(thefile)).temp ,model);
+v2 = OCVfromSOCtemp (0.05 , data(ind(thefile)).temp ,model);
+N1 = find(vk <v1 ,1,'first '); N2 = find(vk <v2 ,1,'first ');
+if isempty(N1), N1=1; end; if isempty(N2), N2=length(verr); end
+rmserr(thefile)=sqrt(mean(verr(N1:N2).^2));
+end % for thefile = 1: numfiles
+cost=sum(rmserr);
+fprintf('RMS error = %0.2f (mV)\n',cost *1000);
+if isnan(cost), stop , end
+return                                                                                                                                                                                                                                                                                             % end of minfn
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+load DYN_Files/E2_DYN/E2_DYN_35_P25.mat                                                                                                                                                                                                   % load data file
+load DYN_Files/E2model.mat                                                                                                                                                                                                                                        % load model file
+time = DYNData.script1.time;                                                                                                                                                                                                                                        % make variables easier to access
+voltage = DYNData.script1.voltage;
+current = DYNData.script1.current;
+
+% get rid of duplicate time steps
+
+ind = find(diff(time) <=0);
+time(ind +1) =[]; voltage(ind +1) =[]; current(ind +1) =[];
+
+% make sure evenly sampled in time
+
+t1=time (1); t2=time(end); deltaT = 1; t = (t1:deltaT:t2) - t1;                                                                                                                                                                     % 1Hz sampling
+current = interp1(time ,current ,t1:deltaT:t2);
+voltage = interp1(time ,voltage ,t1:deltaT:t2);
+vest = simCell(current ,25,deltaT ,model ,1,0,0);                                                                                                                                                                                             % simulate cell
+
+% plot some results
+
+figure (1); clf; plot(t/60,voltage ,t/60, vest);
+legend('Truth ','Model '); title('Example of simCell.m');
+xlabel('Time (min)'); ylabel('Voltage (V)');
+
+load DYN_Files/E2model.mat                                                                                                                                                                                                                                   % load model file
+z = 0:0.01:1; % make SOC input vector
+T = 25; % set temperature value
+plot(z,OCVfromSOCtemp(z,T,model));
+
+load DYN_Files/E2model.mat                                                                                                                                                                                                                                  % load model file
+v = 2.5:0.01:4.2;                                                                                                                                                                                                                                                                  % make voltage input vector
+T = 25; % set temperature value
+plot(v,SOCfromOCVtemp(v,T,model));
+
+load DYN_Files/E2model.mat                                                                                                                                                                                                                                 % load model file
+T = 25; % set temperature value
+gamma = getParamESC('GParam ',T,model); % hysteresis rate factor
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% function [vk ,rck ,zk , OCV] = simCell (ik ,T,deltaT ,model ,z0 ,iR0 ,h0)
+% ik - current , where (+) is discharge
+% T - temperature ( degC ) - can be different at every point in time
+% deltaT - sampling interval in data (s)
+% model - standard model structure
+% z0 - initial SOC
+% iR0 - initial resistor currents as column vector
+% h0 - initial hysteresis state
+%%
+vk - cell voltage at each time instant
+% rck - resistor currents through R-C branches
+% zk - cell states of charge
+% OCV - cell OCV at each time instant
+
+function [vk ,rck ,hk ,zk ,sik , OCV ] = simCell (ik ,T, deltaT ,model ,z0 ,iR0 ,h0)
+ik = ik (:) ; % Force data to be column vector (s)
+
+% Get model parameters from model structure
+
+RCfact = exp (- deltaT ./ abs( getParamESC ('RCParam ',T, model ))) ';
+Q = getParamESC ('QParam ',T, model );
+etaParam = getParamESC ('etaParam ',T, model );
+G = getParamESC ('GParam ',T, model );
+M = getParamESC ('MParam ',T, model );
+M0 = getParamESC ('M0Param ',T, model );
+RParam = getParamESC ('RParam ',T, model );
+R0Param = getParamESC ('R0Param ',T, model );
+etaik = ik; etaik (ik <0) = etaParam *ik(ik <0) ;                                                                                                                                                                                                         % modify input current
+
+% Simulate SOC states
+
+zk = z0 - cumsum ([0; etaik (1: end -1) ])* deltaT /(Q *3600) ;
+if any (zk >1.1) , warning ('Current may have wrong sign as SOC > 110% '); end
+% Simulate the dynamic states of the model
+rck = zeros ( length ( RCfact ),length ( etaik )); rck (: ,1) = iR0 ;
+hk= zeros ([ length (ik) 1]); hk (1) = h0; sik = 0* hk;
+fac = exp (- abs(G* etaik * deltaT /(3600* Q)));
+for k = 2: length (ik),
+rck (:,k) = diag ( RCfact )* rck (:,k -1) + (1- RCfact )* etaik (k -1) ;
+hk(k)=fac (k -1) *hk(k -1) -(1- fac (k -1) )* sign (ik(k -1) );
+sik (k) = sign (ik(k));
+if abs (ik(k))<Q/100 , sik(k) = sik (k -1) ; end
+end
+rck = rck ';
+
+% Compute output equation
+
+OCV = OCVfromSOCtemp (zk ,T, model );
+vk = OCV + M*hk + M0* sik - rck *RParam ' - ik .* R0Param ;
+return                                                                                                                                                                                                                                                                                             % from simCell .m
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% function theParam = getParamESC(paramName ,temperature ,model)
+%%
+Returns the values of the specified ESC cell -model parameter 'paramName ' for
+% the temperatures in 'temperature ' for the cell model data stored in 'model '.
+% 'paramName ' may be one of: 'QParam ', 'RCParam ', 'RParam ', 'R0Param ', 'MParam ',
+% 'M0Param ', 'GParam ', 'EtaParam ' (not case sensitive).
+function theParam = getParamESC(paramName ,temp ,model)
+temp = min(temp ,max(model.temps)); % prohibit NaNs!
+temp = max(temp ,min(model.temps));
+mdlFields = fieldnames(model);
+theField = find(strcmpi(paramName ,mdlFields));
+if isempty(theField), error('Bad argument to "paramName"'); end
+fieldData = model .( mdlFields{theField });
+theParam = repmat(fieldData ,size(temp)); % default , if only one data temp
+if length(fieldData)>1,
+if length(temp)>1,
+theParam = interp1(model.temps ,fieldData ,temp ,'spline ');
+else
+ind = find(model.temps == temp);
+if ~isempty(ind), % avoid call to (slow) interp1 whenever possible
+theParam = fieldData(ind);
+else
+theParam = interp1(model.temps ,fieldData ,temp ,'spline ');
+end
+end
+end
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% ----------------------------------------------------------------------------
+% function OCVfromSOCtemp
+%%
+This function returns the fully rested open -circuit -voltage of a lithium -ion
+% cell given its state -of -charge.
+% Function inputs:
+% soc: state -of -charge (can be scalar , vector , matrix)
+% temp: temperature (either a scalar , or same size as soc)
+% model: model produced by processOCV and/or processDynamic
+
+function ocv=OCVfromSOCtemp(soc ,temp ,model)
+
+% copy data into local variables (easier to use); ensure all are column vectors
+
+OCV0 = model.OCV0 (:); OCVrel = model.OCVrel (:);
+SOC = model.SOC (:); soccol = soc (:);
+if isscalar(temp),
+Tcol = temp*ones(size(soccol));                                                                                                                                                                                                           % copy scalar temperature for all socs
+else
+Tcol = temp (:);                                                                                                                                                                                                                                               % force to be col vector
+end
+
+% initialize output data structures plus some indexing variables
+
+ocv=zeros(size(soccol));                                                                                                                                                                                                                          % initialize the output ocv vector
+diffSOC=SOC (2)-SOC (1);                                                                                                                                                                                                                     % delta SOC in the model structure
+I1=find(soccol <= SOC (1));                                                                                                                                                                                                                    % index of input SOC values out of range (low)
+I2=find(soccol >= SOC(end));                                                                                                                                                                                                               % index of input SOC values out of range (high)
+I3=find(soccol > SOC (1) & soccol < SOC(end));                                                                                                                                                                         % index of SOC values in range
+I6=isnan(soccol); % index of input SOC values equal to NaN
+
+% for input SOC values out of range (low), extrapolate off low end of table
+
+if ~isempty(I1),
+dvdz = ((OCV0 (2)+Tcol .* OCVrel (2)) - (OCV0 (1)+Tcol .* OCVrel (1)))/diffSOC;
+ocv(I1) = (soccol(I1)-SOC (1)).* dvdz(I1) + OCV0 (1)+Tcol(I1).*OCVrel (1);
+end
+
+% for input SOC values out of range (high), extrapolate off
+
+if ~isempty(I2),                                                                                                                                                                                                                                          % high end of table
+dvdz = ((OCV0(end)+Tcol .* OCVrel(end)) - (OCV0(end -1)+Tcol .* OCVrel(end -1)))/diffSOC;
+ocv(I2) = (soccol(I2)-SOC(end)).*dvdz(I2) + OCV0(end)+Tcol(I2).*OCVrel(end);
+end
+
+% for normal SOC range , manually interpolate (10x faster than "interp1 ")
+
+I4=( soccol(I3)-SOC (1))/diffSOC; I5=floor(I4);                                                                                                                                                                         % frac , int index of OCV entry
+I45 = I4 -I5; omI45 = 1-I45;                                                                                                                                                                                                                   % distance b/w frac & int; one minus distance
+ocv(I3)=OCV0(I5+1).* omI45 + OCV0(I5+2).*I45;                                                                                                                                                                  % OCV0 part first , then OCVrel
+ocv(I3)=ocv(I3) + Tcol(I3).*( OCVrel(I5+1).* omI45 + OCVrel(I5+2).*I45);
+
+% for NaN input SOCs
+
+ocv(I6)=0;                                                                                                                                                                                                                                                      % replace NaN SOCs with zero voltage
+ocv = reshape(ocv ,size(soc));                                                                                                                                                                                                            % output ocv same shape as input soc
+return
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% -----------------------------------------------------------
+% simCharge : Simulate CC/CV charging of a battery cell
+% -----------------------------------------------------------
+% creates variable " model " with E1 cell parameter values
+clear ; close all ; clc ; load E1model ;
+% Get ESC model parameters
+
+maxtime = 3001; T = 25; % Simulation run time , temperature
+q = getParamESC ('QParam ',T, model );
+rc = exp ( -1./ abs( getParamESC ('RCParam ',T, model )));
+r = ( getParamESC ('RParam ',T, model ));
+m = getParamESC ('MParam ',T, model );
+m0 = getParamESC ('M0Param ',T, model );
+g = getParamESC ('GParam ',T, model );
+r0 = getParamESC ('R0Param ',T, model );
+maxV = 4.15; % maximum cell voltage of 4.15 V
+
+% Setup for simulation
+
+storez = zeros ([ maxtime 1]) ;                                                                                                                                                                                                                % create storage for SOC
+storev = zeros ([ maxtime 1]) ;                                                                                                                                                                                                                % create storage for voltage
+storei = zeros ([ maxtime 1]) ;                                                                                                                                                                                                                 % create storage for current
+storep = zeros ([ maxtime 1]) ;                                                                                                                                                                                                               % create storage for power
+z = 0.5; irc = 0; h = -1; s = -1;                                                                                                                                                                                                                       % initialize to 50% SOC , resting
+CC = 9;                                                                                                                                                                                                                                                                 % constant current of 9 A in CC/CV charge
+
+% Simulate CC/CV
+
+for k = 1: maxtime ,
+v = OCVfromSOCtemp (z,T, model ) + m*h + m0*s - r* irc ;                                                                                                                                                % fixed voltage
+ik = (v - maxV )/r0;                                                                                                                                                                                                                                        % compute test ik to achieve maxV
+ik = max(-CC ,ik);                                                                                                                                                                                                                                          % but limit ik to no more than CC in mag .
+z = z - (1/3600) *ik/q;                                                                                                                                                                                                                                   % Update cell SOC
+irc = rc*irc + (1- rc)*ik;                                                                                                                                                                                                                               % Update resistor currents
+fac = exp (- abs (g.* ik) ./(3600* q));
+h = fac .*h + (fac -1) .* sign (ik);                                                                                                                                                                                                           % Update hysteresis voltages
+if abs (ik) >1e -3, s = sign (ik); end                                                                                                                                                                                                        % update current sign
+storez (k) = z;                                                                                                                                                                                                                                                 % Store SOC for later plotting
+storev (k) = v - ik*r0;
+storei (k) = ik;                                                                                                                                                                                                                                                % store current for later plotting
+storep (k) = ik* storev (k);
+end                                                                                                                                                                                                                                                                    % for k
+
+% Plot results
+
+time = 0: maxtime - 1;
+
+figure (1); 
+
+plot (time ,100* storez ); title ('State of charge versus time ');
+ylabel ('SOC (%) '); ylim ([49 101]) ; xlabel ('Time (s)'); grid on
+
+figure (2);
+
+plot (time , storev ); title ('Terminal voltage versus time ');
+ylabel ('Voltage (V)'); ylim ([3.94 4.16]) ; xlabel ('Time (s)'); grid on
+
+figure (3);
+
+plot (time , storei ); title ('Cell current versus time ');
+ylabel ('Current (A)'); ylim ([ -10 0.3]) ; xlabel ('Time (s)'); grid on
+
+figure (4);
+
+plot (time , storep ); title ('Cell power versus time ');
+ylabel ('Power (W)'); ylim ([ -40 1]) ; xlabel ('Time (s)'); grid on
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% Now , simulate CP/CV
+
+z = 0.5; irc = 0; h = -1; s = -1                                                                                                                                                                                                                    % initialize to 50% SOC , resting
+CP = 35;                                                                                                                                                                                                                                                          % constant power limit of 35 W in CP/CV charge
+for k = 1: maxtime ,
+v = OCVfromSOCtemp (z,T, model ) + m*h + m0*s - r* irc ;                                                                                                                                           % fixed voltage
+
+% try CP first , but if voltage too high switch to CV instead
+
+ik = (v - sqrt (v^2 - 4* r0 *(- CP))) /(2* r0);
+if v - ik*r0 > maxV , ik = (v - maxV )/r0;
+ end
+
+z = z - (1/3600) *ik/q;                                                                                                                                                                                                                              % Update cell SOC
+irc = rc*irc + (1- rc)*ik;                                                                                                                                                                                                                         % Update resistor currents
+fac = exp (- abs (g.* ik) ./(3600* q));
+h = fac .*h + (fac -1) .* sign (ik);                                                                                                                                                                                                     % Update hysteresis voltages
+if abs (ik) >1e -3, s = sign (ik);                                                                                                                                                                                                           % Update current sign
+end
+storez (k) = z;                                                                                                                                                                                                                                          % Store SOC for later plotting
+storev (k) = v - ik*r0;
+storei (k) = ik;                                                                                                                                                                                                                                        % Store current for later plotting
+storep (k) = ik* storev (k);
+end                                                                                                                                                                                                                                                              % for k
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+% ------------------------------------------------------------------------
+% simPCM : Simulate parallel -cell - module packs ( cells are connected in parallel
+% to make modules ; these modules are connected in series to make packs )
+% The parameter values for each cell may be different
+clear ; close all ; clc ;
+% Initialize some pack configuration parameters ...
+
+load E2model ;                                                                                                                                                                                                                                  % creates var. " model " with E2 cell parameter values
+Ns = 3;                                                                                                                                                                                                                                                     % Number of modules connected in series to make a pack
+Np = 3;                                                                                                                                                                                                                                                   % Number of cells connected in parallel in each module
+
+% Initialize some simulation configuration parameters ...
+
+maxtime = 3600;                                                                                                                                                                                                                            % Simulation run time in simulated seconds
+t0 = 2700;                                                                                                                                                                                                                                           % Pack rests after time t0
+storez = zeros ([ maxtime Ns Np ]);                                                                                                                                                                                     % create storage for SOC
+storei = zeros ([ maxtime Ns Np ]);                                                                                                                                                                                      % create storage for current
+
+% Initialize states for ESC cell model
+
+z = 0.25* ones (Ns ,Np);                                                                                                                                                                                                            % SOC for each cell
+irc = zeros (Ns ,Np);                                                                                                                                                                                                                    % R-C resistor currents for each cell
+h = zeros (Ns ,Np);                                                                                                                                                                                                                      % dynamic hysteresis for each cell
+s = zeros (Ns ,Np);                                                                                                                                                                                                                       % current sign for each cell
+
+% Default initialization for cells within the pack
+
+T = 25;                                                                                                                                                                                                                                                 % Default temperature
+q = getParamESC ('QParam ',T, model )* ones (Ns ,Np);
+rc = exp ( -1./ abs ( getParamESC ('RCParam ',T, model ))) '* ones (Ns ,Np);
+r = ( getParamESC ('RParam ',T, model )) ';
+m = getParamESC ('MParam ',T, model )* ones (Ns ,Np);
+m0 = getParamESC ('M0Param ',T, model )* ones (Ns ,Np);
+g = getParamESC ('GParam ',T, model )* ones (Ns ,Np);
+r0 = getParamESC ('R0Param ',T, model )* ones (Ns ,Np);
+rt = 0.000125;                                                                                                                                                                                                                              % 125 microOhm resistance for each tab
+
+% Modified initialization for cell variability
+% e.g., set individual random " initial SOC " values
+
+if 1,                                                                                                                                                                                                                                                % set to "if 1," to execute , or "if 0," to skip this code
+z =0.30+0.40* rand ([ Ns Np ]); % rand . init . SOC for ea. cell
+end
+
+% e.g., set individual random cell - capacity values
+
+if 1,                                                                                                                                                                                                                                              % set to "if 1," to execute , or "if 0," to skip this code
+q =4.5+ rand ([ Ns Np ]); % random capacity for ea. cell
+end
+
+% e.g., set individual random cell - resistance relationships
+
+if 1,                                                                                                                                                                                                                                            % set to "if 1," to execute , or "if 0," to skip this code
+r0 = 0.005+0.020* rand (Ns ,Np);
+end
+
+r0 = r0 + 2* rt;                                                                                                                                                                                                                     % add tab resistance to cell resistance
+
+
+% Add faults to pack : cells faulted open - and short - circuit
+% To delete a PCM (open - circuit fault ), set a resistance to Inf
+%r0 (1 ,1) = Inf ; % for example ...
+% To delete a cell from a PCM (short - circuit fault ), set its SOC to NaN
+%z(1 ,2) = NaN; % for example , delete cell 2 in PCM 1
+
+Rsc = 0.0025;                                                                                                                                                                                                                   % Resistance value to use for cell whose SOC < 0%
+
+% Get ready to simulate ... first compute pack capacity in Ah
+
+totalCap = min( sum(q ,2) );                                                                                                                                                                                  % pack capacity = minimum module capacity
+I = 10* totalCap ;                                                                                                                                                                                                         % cycle at 10C... not realistic , faster simulation
+
+% simulate pack performance using ESC cell model ...
+
+for k = 1: maxtime ,
+v = OCVfromSOCtemp (z,T, model );                                                                                                                                                              % get OCV for Ns * Np cells
+v = v + m.*h + m0 .*s - r.* irc ;                                                                                                                                                                              % add in capacitor voltages and hysteresis
+r0( isnan (z)) = Rsc ;                                                                                                                                                                                                    % short - circuit fault has "short - circuit " resistance
+V = ( sum (v./r0 ,2) - I)./ sum (1./ r0 ,2) ;
+ik = (v- repmat (V ,1, Np))./ r0;
+z = z - (1/3600) *ik ./q;                                                                                                                                                                                               % Update each cell SOC
+z(z <0) = NaN ;                                                                                                                                                                                                              % set over - discharged cells to short - circuit fault
+irc = rc .* irc + (1- rc).* ik;                                                                                                                                                                                        % Update R-C currents
+fac = exp (- abs (g.* ik) ./(3600* q));
+h = fac .*h + (fac -1) .* sign (ik);                                                                                                                                                                          % Update hysteresis voltages
+s( abs (ik) >1e -3) = sign (ik( abs(ik) >1e -3) );                                                                                                                                                % Update current sign
+minz = min (z (:) ); maxz = max (z (:) );                                                                                                                                                             % Check to see if SOC limit hit
+if minz < 0.05 , I = -abs (I);end                                                                                                                                                                              % stop discharging
+if maxz > 0.95 , I = abs (I); end                                                                                                                                                                             % stop charging
+if k>t0 , I = 0; end                                                                                                                                                                                                        % rest
+storez (k ,: ,:) = z; storei (k ,: ,:) = ik;                                                                                                                                                                  % Store SOC , current for later plotting
+end                                                                                                                                                                                                                                    % for k
+
+% Plot individual cell SOC vs. time for all cells
+% in all series PCMs . There is one subplot for each PCM .
+
+figure ; clf ; t = (0:( length ( storez (: ,: ,1)) -1)) /60;
+xplots = round ( ceil ( sqrt (Ns))); yplots = ceil (Ns/ xplots );
+for k = 1:Ns ,
+zr= squeeze (100* storez (:,k ,:) ); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) 0 100]) ; title ( sprintf ('Cells in PCM %d',k));
+ylabel ('SOC (%) '); xlabel ('Time ( min)');
+end
+
+% Plot individual cell current vs. time for all cells in all series PCMs
+
+figure ; clf ; t = (0:( length ( storei (: ,: ,1)) -1)) /60;
+for k = 1:Ns ,
+zr= squeeze ( storei (:,k ,:) ); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) -101 101]) ; title ( sprintf ('Cells in PCM %d',k));
+ylabel ('Current (A)'); xlabel ('Time ( min)');
+end
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% ------------------------------------------------------------------------
+% simSCM : Simulate series -cell - module packs ( cells are connected in series
+% to make modules ; these modules are connected in parallel to make packs )
+% The parameter values for each cell may be different
+clear ; close all ; clc ;
+% Initialize some pack configuration parameters ...
+
+load E2model ;                                                                                                                                                                                                      % creates var. " model " with E2 cell parameter values
+Ns = 12;                                                                                                                                                                                                                       % Number of cells connected in series in each module
+Np = 3;                                                                                                                                                                                                                         % Number of modules connected in parallel to make a pack
+
+% Initialize some simulation configuration parameters ...
+
+maxtime = 3600;                                                                                                                                                                                                    % Simulation run time in simulated seconds
+t0 = 2700;                                                                                                                                                                                                                   % Pack rests after time t0
+storez = zeros ([ maxtime Ns Np ]);                                                                                                                                                            % create storage for SOC
+storei = zeros ([ maxtime Ns Np ]);                                                                                                                                                             % create storage for current
+
+% Initialize states for ESC cell model
+
+z = 0.25* ones (Ns ,Np);                                                                                                                                                                                   % SOC for each cell
+irc = zeros (Ns ,Np);                                                                                                                                                                                            % R-C resistor currents for each cell
+h = zeros (Ns ,Np);                                                                                                                                                                                              % dynamic hysteresis for each cell
+s = zeros (Ns ,Np);                                                                                                                                                                                                % current sign for each cell
+
+% Default initialization for cells within the pack
+
+T = 25;                                                                                                                                                                                                                        % Default temperature
+q = getParamESC ('QParam ',T, model )* ones (Ns ,Np);
+rc = exp ( -1./ abs ( getParamESC ('RCParam ',T, model ))) '* ones (Ns ,Np);
+r = ( getParamESC ('RParam ',T, model )) ';
+m = getParamESC ('MParam ',T, model )* ones (Ns ,Np);
+m0 = getParamESC ('M0Param ',T, model )* ones (Ns ,Np);
+g = getParamESC ('GParam ',T, model )* ones (Ns ,Np);
+r0 = getParamESC ('R0Param ',T, model )* ones (Ns ,Np);
+rt = 0.000125;                                                                                                                                                                                                        % 125 microOhm resistance for each tab
+
+% Modified initialization for cell variability
+% e.g., set individual random " initial SOC " values
+
+if 1,                                                                                                                                                                                                                           % set to "if 1," to execute , or "if 0," to skip this code
+z =0.30+0.40* rand ([ Ns Np ]); % rand . init . SOC for ea. cell
+end
+
+% e.g., set individual random cell - capacity values
+
+if 1,                                                                                                                                                                                                                       % set to "if 1," to execute , or "if 0," to skip this code
+q =4.5+ rand ([ Ns Np ]); % random capacity for ea. cell
+end
+
+% e.g., set individual random cell - resistance relationships
+
+if 1,                                                                                                                                                                                                                       % set to "if 1," to execute , or "if 0," to skip this code
+r0 = 0.005+0.020* rand (Ns ,Np);
+end
+r0 = r0 + 2* rt;                                                                                                                                                                                                % add tab resistance to cell resistance
+
+% Add faults to pack : cells faulted open - and short - circuit
+% To delete a PCM (open - circuit fault ), set a resistance to Inf
+%r0 (1 ,1) = Inf ; % for example ...
+% To delete a cell from a PCM (short - circuit fault ), set its SOC to NaN
+%z(1 ,2) = NaN; % for example , delete cell 2 in PCM 1
+
+Rsc = 0.0025;                                                                                                                                                                                              % Resistance value to use for cell whose SOC < 0%
+% Get ready to simulate ... first compute pack capacity in Ah
+
+totalCap = sum( min(q));                                                                                                                                                                     % pack capacity = minimum module capacity
+I = 10* totalCap ;                                                                                                                                                                                     % cycle at 10C... not realistic , faster simulation
+
+for k = 1: maxtime ,
+v = OCVfromSOCtemp (z,T, model );                                                                                                                                           % get OCV for Ns * Np cells
+v = v + m.*h +m0 .*s - r.* irc ;                                                                                                                                                            % add hysteresis , diffusion
+r0( isnan (z)) = Rsc ; % s-c fault has "short - circuit " resistance
+V = ( sum ( sum (v ,1) ./ sum (r0 ,1) ,2) -I)./ sum (1./ sum (r0 ,1) ,2);                                                                                  % Bus V
+ik = ( sum (v ,1) -repmat (V ,1, Np))./ sum (r0 ,1) ; % 1 * Np cell currents
+ik = repmat (ik ,Ns ,1);
+z = z - (1/3600) *ik ./q;                                                                                                                                                                           % Update each cell SOC
+z(z <0) = NaN ;                                                                                                                                                                                          % set over - discharged cells to short - circuit fault
+irc = rc .* irc + (1- rc).* ik;                                                                                                                                                                    % Update diffusion currents
+Ah = exp(-abs (g.* ik) ./(3600* q));
+h = Ah .*h + (1- Ah).* sign (ik);                                                                                                                                                       % Update hysteresis voltages
+s( abs (ik) >1e -3) = sign (ik( abs(ik) >1e -3) );                                                                                                                          % Update current sign
+if min (z (:) ) < 0.05 , I = -abs (I);                                                                                                                                                      % stop discharging
+end
+if max (z (:) ) > 0.95 , I = abs (I);
+ end                                                                                                                                                                                                              % stop charging
+if k>t0 , I = 0; 
+end                                                                                                                                                                                                              % rest
+storez (k ,: ,:) = z; storei (k ,: ,:) = ik;                                                                                                                                            % Store SOC , current for later plotting
+end                                                                                                                                                                                                              % for k
+
+% Plot individual cell SOC vs. time for all cells
+% in all series PCMs . There is one subplot for each SCM 
+.
+figure ; 
+clf ; t = (0:( length ( storez (: ,: ,1)) -1)) /60;
+xplots = round ( ceil ( sqrt (Np))); yplots = ceil (Np/ xplots );
+
+for k = 1:Np ,
+zr= squeeze (100* storez (: ,: ,k)); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) 0 100]) ; title ( sprintf ('Cells in SCM %d',k));
+ylabel ('SOC (%) '); xlabel ('Time ( min)');
+end
+
+% Plot individual cell current vs. time for all cells in all series PCMs
+
+figure ; 
+clf ;
+ t = (0:( length ( storei (: ,: ,1)) -1)) /60;
+for k = 1:Np ,
+zr= squeeze ( storei (: ,: ,k)); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) -101 101]) ; title ( sprintf ('Cells in SCM %d',k));
+ylabel ('Current (A)'); xlabel ('Time ( min)');
+end
+
+% simulate pack performance using ESC cell model ...
+
+% Plot individual cell SOC vs. time for all cells
+% in all series PCMs . There is one subplot for each SCM .
+
+figure ; 
+clf ;
+ t = (0:( length ( storez (: ,: ,1)) -1)) /60;
+xplots = round ( ceil ( sqrt (Np))); yplots = ceil (Np/ xplots );
+for k = 1:Np ,
+zr= squeeze (100* storez (: ,: ,k)); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) 0 100]) ; title ( sprintf ('Cells in SCM %d',k));
+ylabel ('SOC (%) '); xlabel ('Time ( min)');
+end
+
+% Plot individual cell current vs. time for all cells in all series PCMs
+
+figure ;
+ clf ; 
+t = (0:( length ( storei (: ,: ,1)) -1)) /60;
+for k = 1:Np ,
+zr= squeeze ( storei (: ,: ,k)); subplot ( yplots ,xplots ,k); plot (t,zr);
+axis ([0 ceil ( maxtime /60) -101 101]) ; title ( sprintf ('Cells in SCM %d',k));
+ylabel ('Current (A)'); xlabel ('Time ( min)');
+end
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+ELECTRIC VEHICLE SPECIAL
+
+Defining cell, module, battery
+
+% setup simulation of vehicle - pass on to simVehicle .m
+
+function results = setupSimVehicle
+files = {'nycc . txt ','udds . txt ','us06 . txt ','hwy . txt '};
+
+% Setup the Chevy Volt
+% set up cell : capacity [Ah], weight [g], (vmax , vnom , vmin ) [V]
+
+cell = setupCell (15 ,450 ,4.2 ,3.8 ,3.0) ;
+
+% set up module : number of cells in parallel , number of cells in
+% series , overhead of module by fraction of total cells ' weight
+
+module = setupModule (3 ,8 ,0.08 , cell );
+
+% set up battery : number of modules in series , overhead of battery by
+% fraction of total modules ' weight , ( full SOC , empty SOC ) [%] ,
+% efficiency for this module
+
+Defining motor, wheel, drivetrain, vehicle
+
+% set up motor : max torque " Lmax " [Nm], ( RPMrated , RPMmax )
+% [RPM ], efficiency , inertia [kg/m2]
+
+motor = setupMotor (275 ,4000 ,12000 ,0.95 ,0.2) ;
+
+% set up wheel : radius [m], inertia [kg/m2], rollCoef
+
+wheel = setupWheel (0.35 ,8 ,0.0111) ;
+
+% set up drivetrain : inverter efficiency , fractional regen torque
+% limit , gear ratio , gear inertia [kg/m2], gear efficiency for this
+% battery , motor , and wheel
+
+drivetrain = setupDrivetrain (0.94 ,0.9 ,12 ,0.05 ,0.97 , battery ,motor , wheel );
+
+% set up vehicle : # wheels , roadForce [N], Cd , frontal area [m2],
+% weight [kg], payload [kg], overhead power [W] for this drivetrain
+
+vehicle = setupVehicle (4 ,0 ,0.22 ,1.84 ,1425 ,75 ,200 , drivetrain );
+
+Performing the simulation
+
+fprintf ('\n\ nStarting sims ...\ n');
+for theCycle = 1: length ( files ),
+cycle = dlmread ( files { theCycle },'\t' ,2 ,0);
+results = simVehicle ( vehicle ,cycle ,0.3) ;
+range = ( vehicle . drivetrain . battery . socFull - ...
+vehicle . drivetrain . battery . socEmpty )
+( vehicle . drivetrain . battery . socFull - results . batterySOC (end )) * results . distance ( end );
+
+fprintf ('Cycle = %s, range = %6.1 f [km ]\n',files { theCycle }, range );
+end
+end
+
+%Setting up the cell data structure
+
+function cell = setupCell ( capacity , weight ,vmax ,vnom , vmin )
+cell . capacity = capacity ;                                                                                                                                                                                                                   % ampere hours
+cell . weight = weight ;                                                                                                                                                                                                                         % grams
+cell . vmax = vmax ;                                                                                                                                                                                                                                % volts
+cell . vnom = vnom ;                                                                                                                                                                                                                               % volts
+cell . vmin = vmin ;                                                                                                                                                                                                                                  % volts
+cell . energy = vnom * capacity ;                                                                                                                                                                                                    % Watt - hours
+cell . specificEnergy = 1000 * cell . capacity * cell . vnom / ...
+cell . weight ;                                                                                                                                                                                                                                            % Wh/kg
+end
+
+%Setting up the module data structure
+
+function module = setupModule ( numParallel , numSeries , overhead , cell )
+module . numParallel = numParallel ;
+module . numSeries = numSeries ;
+module . overhead = overhead ;
+module . cell = cell ;
+module . numCells = numParallel * numSeries ;
+module . capacity = numParallel * cell . capacity ;
+module . weight = module . numCells * cell . weight * 1/(1 - overhead ) /1000; % kg
+module . energy = module . numCells * cell . energy /1000; % kWh
+module . specificEnergy = 1000 * module . energy / module . weight ; % Wh/kg
+end
+
+%Setting up the battery data structure
+
+function battery = setupPack ( numSeries , overhead , socFull ,socEmpty , efficiency , module )
+battery . numSeries = numSeries ;
+battery . overhead = overhead ;
+battery . module = module ;
+battery . socFull = socFull ;
+battery . socEmpty = socEmpty ;                                                                                                                                                                                         % unitless
+battery . efficiency = efficiency ;                                                                                                                                                                                            % unitless , captures I*I*R losses
+battery . numCells = module . numCells * numSeries ;
+battery . weight = module . weight * numSeries * 1/(1 - overhead );                                                                                                                % kg
+battery . energy = module . energy * numSeries ;                                                                                                                                                       % kWh
+battery . specificEnergy = 1000 * battery . energy / battery . weight ;                                                                                                            % Wh/kg
+battery . vmax = numSeries * module . numSeries * module . cell . vmax ;
+battery . vnom = numSeries * module . numSeries * module . cell . vnom ;
+battery . vmin = numSeries * module . numSeries * module . cell . vmin ;
+end
+
+%Setting up the motor, wheel data structures
+
+function wheel = setupWheel ( radius , inertia , rollCoef )
+wheel . radius = radius ;                                                                                                                                                                                                                 % m
+wheel . inertia = inertia ;                                                                                                                                                                                                               % km -m2
+wheel . rollCoef = rollCoef ;
+end
+function motor = setupMotor (Lmax , RPMrated , RPMmax , efficiency , inertia )
+motor . Lmax = Lmax ;                                                                                                                                                                                                                  % N-m
+motor . RPMrated = RPMrated ;
+motor . RPMmax = RPMmax ;
+motor . efficiency = efficiency ;
+motor . inertia = inertia ;                                                                                                                                                                                                              %kg -m2
+motor . maxPower = 2* pi* Lmax * RPMrated /60000;                                                                                                                                                % kW
+end
+
+Setting up the drivetrain data structure
+
+function drivetrain = setupDrivetrain ( inverterEfficiency ,regenTorque , gearRatio , gearInertia , gearEfficiency , battery ,motor , wheel )
+drivetrain . inverterEfficiency = inverterEfficiency ;
+
+% regen torque is fraction of braking power that is used to charge
+% battery ; e.g., value of 0.9 means 90% of braking power contributes
+% to charging battery ; 
+10% lost to heat in friction brakes
+
+drivetrain . regenTorque = regenTorque ;
+drivetrain . battery = battery ;
+drivetrain . motor = motor ;
+drivetrain . wheel = wheel ;
+drivetrain . gearRatio = gearRatio ;
+drivetrain . gearInertia = gearInertia ;                                                                                                                                                                                  % kg -m2 , measured on motor side
+drivetrain . gearEfficiency = gearEfficiency ;
+drivetrain . efficiency = battery . efficiency * inverterEfficiency *motor . efficiency * gearEfficiency ;
+end
+
+%Setting up the vehicle data structure
+
+function vehicle = setupVehicle ( wheels , roadForce ,Cd ,A ,weight , payload , overheadPwr , drivetrain )
+
+vehicle . drivetrain = drivetrain ;
+vehicle . wheels = wheels ;                                                                                                                                                                                                       % number of them
+vehicle . roadForce = roadForce ;                                                                                                                                                                                        % N
+vehicle .Cd = Cd;                                                                                                                                                                                                                            % drag coeff
+vehicle .A = A;                                                                                                                                                                                                                                 % frontal area , m2
+vehicle . weight = weight ;                                                                                                                                                                                                      % kg
+vehicle . overheadPwr = overheadPwr ;                                                                                                                                                                           % W
+vehicle . maxWeight = weight + drivetrain . battery . weight + payload ;
+vehicle . rotWeight = (( drivetrain . motor . inertia + drivetrain . gearInertia ) *drivetrain . gearRatio ^2 + drivetrain . wheel . inertia * wheels ) /drivetrain . wheel . radius ^2;
+vehicle . equivMass = vehicle . maxWeight + vehicle . rotWeight ;
+vehicle . maxSpeed = 2* pi * drivetrain . wheel . radius * drivetrain . motor . RPMmax * 60 / (1000 * drivetrain . gearRatio );                               % km/h
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%simVehicle.m
+
+% results = simVehicle(vehicle ,cycle ,grade)
+% - simulate vehicle defined by "vehicle", e.g., created via setupSimVehicle.m
+% - cycle is Nx2: column 1 = time (s); column 2 = desired speed (mph)
+% - grade is road grade in percent - either a constant grade for all
+% time , or a different grade value for every point in time
+
+function results = simVehicle(vehicle ,cycle ,grade)
+rho = 1.225;                                                                                                                                                                                                                                                               % air density , kg/m3
+results.vehicle = vehicle;
+results.cycle = cycle;                                                                                                                                                                                                                                            % time in s, desired speed in miles/hour
+results.time = cycle (: ,1);                                                                                                                                                                                                                                  % s
+results.grade = atan(grade /100);                                                                                                                                                                                                 % convert percent to radians
+if isscalar(grade),
+results.grade = repmat(results.grade ,size(results.time));
+end
+
+results.desSpeedKPH = cycle (: ,2) * 1.609344;                                                                                                                                                                  % convert to km/h
+results.desSpeed = min(vehicle.maxSpeed ,results.desSpeedKPH *1000/3600);                                                                                          % m/s
+
+%Preallocate storage for results to be computed
+
+results.desAccel = zeros(size(results.desSpeed));                                                                                                                                                          % m/s2
+results.desAccelForce = zeros(size(results.desSpeed));                                                                                                                                              % N
+results.aeroForce = zeros(size(results.desSpeed));                                                                                                                                                       % N
+results.rollGradeForce = zeros(size(results.desSpeed));                                                                                                                                             % N
+results.demandTorque = zeros(size(results.desSpeed));                                                                                                                                           % N-m
+results.maxTorque = zeros(size(results.desSpeed));                                                                                                                                                    % N-m
+results.limitRegen = zeros(size(results.desSpeed));                                                                                                                                                    % N-m
+results.limitTorque = zeros(size(results.desSpeed));                                                                                                                                                   % N-m
+
+% and so forth ... also preallocate (zeroed out) storage for
+% results.motorTorque (N-m), results.demandPower (kW)
+% results.limitPower (kW), results.batteryDemand (kW)
+% results.current (A), results.batterySOC (0..100)
+% results.actualAccelForce (N), results.actualAccel (m/s2)
+% results.motorSpeed (RPM), results.actualSpeed (m/s)
+% results.actualSpeedKPH (km/h), results.distance (km)
+
+%Start simulation, compute desired forces
+
+prevSpeed = 0; 
+prevMotorSpeed = 0; 
+prevDistance = 0;
+prevTime = results.time (1) - 1;
+ prevSOC = vehicle.drivetrain.battery.socFull;
+
+for k = 1:length(results.desSpeed),
+results.desAccel(k) = (results.desSpeed(k) - prevSpeed)/(results.time(k) - prevTime);
+results.desAccelForce(k) = vehicle.equivMass * results.desAccel(k);
+results.aeroForce(k) = 0.5 * rho * vehicle.Cd * vehicle.A * prevSpeed ^2;
+results.rollGradeForce(k) = vehicle.maxWeight * 9.81 * sin(results.grade(k));
+
+if abs(prevSpeed) > 0,
+results.rollGradeForce(k) = results.rollGradeForce(k) + vehicle.drivetrain.wheel.rollCoef * vehicle.maxWeight * 9.81;
+end
+
+%Compute desired torques, limit them
+
+results.demandTorque(k) = (results.desAccelForce(k) + ...
+results.aeroForce(k) + results.rollGradeForce(k) + vehicle.roadForce) *vehicle.drivetrain.wheel.radius / vehicle.drivetrain.gearRatio;
+if prevMotorSpeed < vehicle.drivetrain.motor.RPMrated ,
+results.maxTorque(k) = vehicle.drivetrain.motor.Lmax;
+else
+
+results.maxTorque(k) = vehicle.drivetrain.motor.Lmax * vehicle.drivetrain.motor.RPMrated / prevMotorSpeed;
+end
+
+results.limitRegen(k) = min(results.maxTorque(k) ,vehicle.drivetrain.regenTorque * vehicle.drivetrain.motor.Lmax);
+results.limitTorque(k) = min(results.demandTorque(k),results.maxTorque(k));
+
+if results.limitTorque(k) > 0,
+results.motorTorque(k) = results.limitTorque(k);
+else
+
+results.motorTorque(k) = max(-results.limitRegen(k) ,results.limitTorque(k));
+end
+
+%Compute actual speed, distance
+
+results.actualAccelForce(k) = results.limitTorque(k) *vehicle.drivetrain.gearRatio / vehicle.drivetrain.wheel.radius - ...
+results.aeroForce(k) - results.rollGradeForce(k) - vehicle.roadForce;
+results.actualAccel(k) = results.actualAccelForce(k) / vehicle.equivMass;
+results.motorSpeed(k) = min(vehicle.drivetrain.motor.RPMmax ,vehicle.drivetrain.gearRatio * (prevSpeed + results.actualAccel(k) *(results.time(k) - prevTime))*60 / (2*pi*vehicle.drivetrain.wheel.radius));
+
+results.actualSpeed(k) = results.motorSpeed(k) * 2*pi*vehicle.drivetrain.wheel.radius / (60 * vehicle.drivetrain.gearRatio);
+results.actualSpeedKPH(k) = results.actualSpeed(k) * 3600/1000;
+deltadistance = (results.actualSpeed(k) + prevSpeed)/2 *...(results.time(k) - prevTime)/1000;
+results.distance(k) = prevDistance + deltadistance;
+
+%Computing motor and battery power demands
+
+if results.limitTorque(k) > 0,
+results.demandPower(k) = results.limitTorque(k);
+else
+results.demandPower(k) = max(results.limitTorque(k),-results.limitRegen(k));
+end
+
+results.demandPower(k) = results.demandPower(k) * 2*pi * (prevMotorSpeed + results.motorSpeed(k)) / 2 / 60000;
+results.limitPower(k) = max(-vehicle.drivetrain.motor.maxPower ,min(vehicle.drivetrain.motor.maxPower ,results.demandPower(k)));
+results.batteryDemand(k) = vehicle.overheadPwr /1000;
+
+if results.limitPower(k) > 0,
+results.batteryDemand(k) = results.batteryDemand(k) + results.limitPower(k)/vehicle.drivetrain.efficiency;
+else
+results.batteryDemand(k) = results.batteryDemand(k) + results.limitPower(k)*vehicle.drivetrain.efficiency;
+end
+
+%Update battery SOC, storing results
+
+results.current(k) = results.batteryDemand(k)*1000/vehicle.drivetrain.battery.vnom;
+results.batterySOC(k) = prevSOC - results.current(k) * (results.time(k) - prevTime) / (36*vehicle.drivetrain.battery.module.capacity);
+
+prevTime = results.time(k);
+prevSpeed = results.actualSpeed(k);
+prevMotorSpeed = results.motorSpeed(k);
+prevSOC = results.batterySOC(k);
+prevDistance = results.distance(k);
+
+end
+
+
+
