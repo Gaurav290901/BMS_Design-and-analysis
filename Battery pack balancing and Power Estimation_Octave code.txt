@@ -1,0 +1,355 @@
+Battery Pack Balancing and Power estimation
+
+% --------------------------------------------------------------------
+% simRandPack : Simulate battery pack having Ns cells in series for Nc
+% discharge / charge cycles , where all cells in pack can have random
+% parameter values (e.g., capacity , resistance , etc .)
+%%
+Assumes no hysteresis in the cell model ( this could be changed
+% fairly easily ; hysteresis makes results more difficult to interpret ,
+% so this assumption is okay for a first analysis , at least ).
+% --------------------------------------------------------------------
+
+function packData = simRandPack (Ns ,Nc , cycleFile ,model , randOptions )
+tOpt = randOptions (1); qOpt = randOptions (2) ; rOpt = randOptions (3) ;
+sdOpt = randOptions (4) ; cOpt = randOptions (5) ; lOpt = randOptions (6) ;
+profile = load ( cycleFile );                                                                                                                                                                                      % e.g., 'uddsPower .txt '
+
+% Create storage for all cell states after completion of each cycle
+
+packData . storez = zeros ([ Ns Nc ]);                                                                                                                                                                % create storage for final SOC
+packData . storeirc = zeros ([ Ns Nc ]);
+
+% Initialize default states for ESC cell model
+maxSOC = 0.95;                                                                                                                                                                                                         % cell SOC when pack is " fully charged "
+minSOC = 0.1;                                                                                                                                                                                                             % cell SOC when pack is " fully discharged "
+z = maxSOC * ones (Ns ,1) ;                                                                                                                                                                                 % start fully charged
+irc = zeros (Ns ,1) ;                                                                                                                                                                                                     % at rest
+ik = zeros ([ Ns 1]) ;                                                                                                                                                                                                   % current experienced by each cell
+
+% Set cell temperatures based on tOpt
+
+if tOpt ,                                                                                                                                                                                                                         % set to "if 1," to execute , or "if 0," to skip this code
+T = 22.5 + 5* rand ([ Ns 1]) ;
+else
+T = 25* ones ([ Ns 1]) ;
+end
+
+% Set self - discharge " cell temperature "
+
+Tsd = T - 5 + 10* rand ([ Ns 1]) ;
+
+% Set cell module leakage current based on lOpt
+
+if lOpt ,
+leak = 0.01 + 0.002* rand ([ Ns 1]) ;
+else
+leak = 0.01* ones ([ Ns 1]);
+end
+
+% Default initialization for cells within the pack
+% Note that since T has Ns elements , there is one parameter value
+% per cell ( even if all turn out to be identical )
+
+q = getParamESC ('QParam ',T, model );
+rc = exp ( -1./ abs ( getParamESC ('RCParam ',T, model )));
+r = ( getParamESC ('RParam ',T, model )).*(1 - rc);
+r0 = getParamESC ('R0Param ',T, model );
+rt = 2*0.000125;                                                                                                                                                                                 % 125 microOhm resistance for each tab
+maxVlim = OCVfromSOCtemp ( maxSOC ,T, model );
+minVlim = OCVfromSOCtemp ( minSOC ,T, model );
+eta = ones ([ Ns 1]) ;
+
+% Modified initialization for cell variability
+% Set individual random cell - capacity values
+
+if qOpt ,                                                                                                                                                                                               % set to "if 1," to execute , or "if 0," to skip this code
+q=q -0.25+0.5* rand ([ Ns 1]);                                                                                                                                                   % random capacity for ea. cell
+end
+
+% Set individual random cell - resistance values
+
+if rOpt ,                                                                                                                                                                                              % set to "if 1," to execute , or "if 0," to skip this code
+r0 = r0 -0.0005+0.0015* rand (Ns ,1);
+end
+r0 = r0 + rt;                                                                                                                                                                                       % add tab resistance to cell resistance
+R = sum (r0 ,1);
+
+% Set individual random cell - coulombic - efficiency values
+
+if cOpt ,                                                                                                                                                                                             % set to "if 1," to execute , or "if 0," to skip this code
+eta = eta - 0.001 - 0.002* rand ([ Ns 1]) ;
+end
+
+% Now , simulate pack performance using ESC cell model .
+
+theCycle = 1; theState = 'discharge ';
+disCnt = 0;                                                                                                                                                                                      % start at beginning of profile
+fprintf (' Cycle = 1, discharging ... ');
+while theCycle <= Nc ,
+v = OCVfromSOCtemp (z,T, model );                                                                                                                             % get OCV for each cell
+v = v - r.* irc ;                                                                                                                                                                                % add in capacitor voltages
+V = sum (v);                                                                                                                                                                                  % Total voltage excluding I*R
+vt = v-ik .* r0;                                                                                                                                                                              % Cell terminal voltages
+switch ( theState )
+case 'discharge ';
+
+% Get instantaneous demanded pack power , repeating profile
+
+P = profile ( rem ( disCnt , length ( profile ))+1) ;
+
+% Compute demanded pack current based on unloaded voltage
+I = V /(2* R) - sqrt (V ^2/ R^2 - 4*P/R) /2;
+
+% Default cell current = pack current
+
+ik = I* ones (Ns ,1) ;
+if I < 0,                                                                                                                                                                                       % If we happen to be charging this momement
+ik = ik .* eta;
+end
+if min (z) <= minSOC || min (vt) < minVlim ,                                                                                                         % stop discharging
+theState = 'charge '; chargeFactor = 1; ik = 0* ik;
+fprintf ('charging ... ');
+end
+disCnt = disCnt + 1;
+
+case 'charge ';                                                                                                                                                                     % start charging @ 6.6 kW , then taper
+P = -6600/ chargeFactor ;
+I = eta * max (- min (q),V /(2* R) - sqrt (V ^2/ R^2 - 4*P/R) /2) ;                                                                 % limit to 1C max
+if max (vt) >= maxVlim ,
+if chargeFactor > 32,                                                                                                                                                        % exit after 6.6 kW /32 charge
+packData . storez (:, theCycle ) = z; packData . storeirc (:, theCycle ) = irc ;
+theState = 'discharge ';
+disCnt = 0; ik = 0* ik; 
+theCycle = theCycle + 1;
+if theCycle <= Nc ,
+fprintf ('\n Cycle = %d, discharging ... ',theCycle );
+end
+end
+chargeFactor = chargeFactor *2;
+end
+end                                                                                                                                                                                            % switch
+
+% Simulate self discharge via variable resistor in parallel
+
+if sdOpt == 1,                                                                                                                                                                       % compute self - discharge " resistance " and apply
+ik = ik + vt ./(( -20+0.4* Tsd ).*z + (35 -0.5* Tsd))*1 e3;
+end
+
+% Simulate leakage current
+
+ik = ik + leak ;
+z = z - (1/3600) *ik ./q;                                                                                                                                                   % Update each cell SOC
+irc = rc .* irc + (1- rc).* ik;                                                                                                                                            % Update resistor currents
+end                                                                                                                                                                                         % end while
+fprintf ('\n');
+packData .q = q; packData .rc = rc; packData . eta = eta;
+packData .r = r; packData .r0 = r0; packData . Tsd = Tsd;
+packData .T = T; packData . leak = leak ;
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Power-limits estimation
+
+% Parameters
+
+load ('CellModel . mat ');                                                                                                                                      % ESC cell model
+load ('CellData .mat ');                                                                                                                                           % time / current / voltage /soc / spkfSOC / bounds
+
+% Cell Configuration
+
+T = 25;                                                                                                                                                                              % [ degC ] ambient temperature
+Thorz = 10;                                                                                                                                                                     % [s] horizon time
+z = 0.5;                                                                                                                                                                              % [] initial cell SOC
+Ns = 1;                                                                                                                                                                               % [] number of series cells
+Np = 1;                                                                                                                                                                              % [] number of parallel cells
+
+% Operational Limits
+
+zmin = 0.1; zmax = 0.9;                                                                                                                                              % [] soc limits
+vmin = 2.8; vmax = 4.3;                                                                                                                                              % [V] voltage limits
+imin = -200; imax = 350;                                                                                                                                            % [A] current limits
+pmin = -inf ; pmax = inf;                                                                                                                                            % [W] power limits
+
+% Effective Resistances
+
+Q = getParamESC ('QParam ',T, model );
+iChg = 10* Q*[ zeros (5 ,1); -ones (Thorz ,1) ; zeros (5 ,1) ];                                                                    % [A] charge pulse
+iDis = 10* Q*[ zeros (5 ,1); ones (Thorz ,1) ; zeros (5 ,1) ];                                                                        % [A] discharge pulse
+[vk ,~ ,~ ,~ ,~] = simCell (iChg ,T,model ,1,z ,0 ,0);                                                                                        % 1 = sample period
+dvChg = max (vk)-vk (1) ;
+iChg = min ( iChg );
+RChg = abs ( dvChg / iChg );
+fprintf ('Rchg = %2.4 f ( mOhm )\n' ,1000* RChg );
+[vk ,~ ,~ ,~ ,~] = simCell (iDis ,T,model ,1,z ,0 ,0);                                                                                          % 1 = sample period
+dvDis = min (vk)-vk (1) ;
+iDis = max ( iDis );
+RDis = abs ( dvDis / iDis );
+fprintf ('Rdis = %2.4 f ( mOhm )\n' ,1000* RDis );
+
+% HPPC Power Estimation : Truth
+
+OCV = OCVfromSOCtemp (soc ,T, model );
+iDisMaxV = (OCV - vmin )/ RDis ;
+iDisMaxZ = (soc - zmin ) *3600* Q/ Thorz ;
+iDisMax = max (0, min ([ iDisMaxV ; iDisMaxZ ; imax * ones ( size ( soc ))]));
+pDisMax = min ( vmin * iDisMax , pmax * ones ( size ( soc )));
+iChgMinV = (OCV - vmax )/ RChg ;
+iChgMinZ = (soc - zmax ) *3600* Q/ Thorz ;
+iChgMin = max ([ iChgMinV ; iChgMinZ ; imin * ones ( size ( soc))]);
+pChgMin = min (0, max( vmax * iChgMin , pmin * ones ( size ( soc))));
+HPPC . pDisMax = pDisMax ;
+HPPC . pChgMin = pChgMin ;
+
+% HPPC Power Estimation : SPKF
+
+OCVDis = OCVfromSOCtemp ( spkfSOC - bounds ,T, model );
+OCVChg = OCVfromSOCtemp ( spkfSOC + bounds ,T, model );
+iDisMaxV = (OCVDis - vmin )/ RDis ;
+iDisMaxZ = ( spkfSOC - bounds - zmin ) *3600* Q/ Thorz ;
+iDisMax = max (0, min ([ iDisMaxV ; iDisMaxZ ; imax * ones ( size ( soc ))]));
+pDisMax = min ( vmin * iDisMax , pmax * ones ( size ( soc )));
+iChgMinV = (OCVChg - vmax )/ RChg ;
+iChgMinZ = ( spkfSOC + bounds - zmax ) *3600* Q/ Thorz ;
+iChgMin = max ([ iChgMinV ; iChgMinZ ; imin * ones ( size ( soc))]);
+pChgMin = min (0, max( vmax * iChgMin , pmin * ones ( size ( soc))));
+spkfHPPC . pDisMax = pDisMax ;
+spkfHPPC . pChgMin = pChgMin ;
+
+Bisection search
+
+% Search interval x1 ... x2 in fn h(.) for root , with tolerance tol
+
+function x = bisect (h,x1 ,x2 , tol )
+jmax = ceil ( log2 ( abs (x2 -x1)/ tol ));
+dx = x2 - x1;                                                                                                                                                                                                         % set the search interval dx = x2 - x1
+if( h(x1) >= 0 )
+dx = -dx; x1 = x2;                                                                                                                                                                                               % root now b/w (x1 ,x1 + dx), and h(x1) < 0
+end
+
+for jj = 1: jmax
+dx = 0.5 * dx; xmid = x1 + dx;
+if h( xmid ) <= 0,
+x1 = xmid ;
+end
+end
+x = x1 + 0.5* dx;
+end
+h = @(x) x^3;
+bisect (h , -1 ,2 ,1e -5)
+
+%estimate power limits using bisection and ESC model
+
+A = @(ik) diag ([1 exp ( -1/( RC)) exp (- abs (ik* Gamma /(3600* Q)))]);
+B = @(ik) [ -1/(3600* Q) 0; (1- exp ( -1/ RC)) 0; 0 (exp (- abs (ik* Gamma /(3600* Q))) -1) ];
+
+% Simulate cell for KDT samples , with input current equal to ik , initial
+% state = x0 , A and B functions , temperature = T, with model parameters
+% R0 , R, M and the model structure " model ".
+
+function [vDT , xDT ] = simCellKDT (ik ,x0 ,A,B,KDT ,T,model ,R0 ,R,M,M0)
+Amat = A(ik); Bmat = B(ik); dA = diag ( Amat );
+if ik == 0,
+ADT = diag ([ KDT , (1- dA (2) ^ KDT )/(1 - dA (2)), KDT ]);
+else
+ADT = diag ([ KDT , (1- dA (2) ^ KDT )/(1 - dA (2)), (1- dA (3) ^ KDT )/(1 - dA (3) )]);
+end
+xDT = (dA).^ KDT .* x0 + ADT * Bmat *[ ik; sign (ik)];
+vDT = OCVfromSOCtemp (xDT (1) ,T, model )+M* xDT (3) +M0* sign (ik)-R* xDT (2) -ik*R0;
+end
+
+function h = bisectDischarge (ik ,x0 ,A,B,KDT ,T,model ,R0 ,R,M,minV , zmin )
+[vDT , xDT ] = simCellKDT (ik ,x0 ,A,B,KDT ,T,model ,R0 ,R,M);
+h = max ( minV - vDT , zmin - xDT (1) ); % max must be less than zero
+end
+
+function h = bisectCharge (ik ,x0 ,A,B,KDT ,T,model ,R0 ,R,M,maxV , zmax )
+[vDT , xDT ] = simCellKDT (ik ,x0 ,A,B,KDT ,T,model ,R0 ,R,M);
+h = min ( maxV - vDT , zmax - xDT (1) ); % min must be greater than zero
+end
+
+h = @(x) bisectDischarge (x,x0 ,A,B,KDT ,T,model ,R0 ,R,M,minV , zmin )
+ilimit = bisect (h ,0, imax , itol );
+
+% Bisection Power Estimation : Truth
+% Define inline functions that compute A and B for input current = ik
+
+A = @(ik) [1 0 0; 0 exp ( -1/( RC)) 0; 0 0 exp (- abs (ik* Gamma /(3600* Q)))];
+B = @(ik) [ -1/(3600* Q) 0; (1- exp ( -1/ RC)) 0; 0 ( exp (- abs(ik* Gamma /(3600* Q))) -1) ];
+
+% First simulate state trajectory for entire profile of current versus time
+
+[vk ,irck ,hk ,zk , OCV] = simCell ( current ,T,model ,1 ,0 ,0);
+
+% Reserve storage for results of power calculations
+
+pDisMax = zeros ( length ( current ) ,1);
+pChgMin = zeros ( length ( current ) ,1);
+
+% Loop through profile of current versus time , computing power
+
+for ii = 1: length ( current )
+x0 = [zk(ii); irck (ii); hk(ii)];                                                                                                                                                      % cell model state at this point in time
+
+% Discharge Power Estimation
+
+g = @(ik) bisectDischarge (ik ,x0 ,A,B,Thorz ,T,model ,R0 ,R,M,M0 ,vmin , zmin );
+iDisMax = 0;
+if zk(ii) > zmin ,
+iDisMax = bisect (g ,0, imax ,0.5) ;                                                                                                                                        % bisect "g" between 0 and imax with eps =0.5
+end
+pDisMax (ii) = vmin * iDisMax ;
+
+% Charge Power Estimation
+
+g = @(ik) bisectCharge (ik ,x0 ,A,B,Thorz ,T,model ,R0 ,R,M,M0 ,vmax , zmax );
+iChgMin = 0;
+if zk(ii) < zmax ,
+iChgMin = bisect (g ,0, imin ,0.5) ;                                                                                                                                          % bisect "g" between 0 and imin with eps =0.5
+end
+pChgMin (ii) = vmax * iChgMin ;
+end
+truthBisect . pDisMax = pDisMax ;
+truthBisect . pChgMin = pChgMin ;
+
+% Bisection Power Estimation : SPKF
+
+[irck , irckBounds ,hk , hkBounds ,zk , zkBounds ] = SPKFmethod ();
+pDisMax = zeros ( length ( current ) ,1);
+pChgMin = zeros ( length ( current ) ,1);
+for ii = 1: length ( current )
+
+% Discharge Power Estimation
+
+x0 = [zk(ii)-zkBounds (ii); irck (ii)+ irckBounds (ii); (hk(ii)-hkBounds (ii))];
+g = @(ik) bisectDischarge (ik ,x0 ,A,B,Thorz ,T,model ,R0 ,R,M,M0 ,vmin , zmin );
+iDisMax = 0;
+if zk(ii)-zkBounds (ii)>zmin ,
+iDisMax = bisect (g ,0, imax ,0.5) ;
+end
+pDisMax (ii) = vmin * iDisMax ;
+
+% Charge Power Estimation
+
+x0 = [zk(ii)+ zkBounds (ii); irck (ii)-irckBounds (ii); (hk(ii)+ hkBounds (ii))];
+g = @(ik) bisectCharge (ik ,x0 ,A,B,Thorz ,T,model ,R0 ,R,M,M0 ,vmax , zmax );
+iChgMin = 0;
+if zk(ii)+ zkBounds (ii) < zmax ,
+iChgMin = bisect (g ,0, imin ,0.5) ;
+end
+pChgMin (ii) = vmax * iChgMin ;
+end
+spkfBisect . pDisMax = pDisMax ;
+spkfBisect . pChgMin = pChgMin ;
+
+
+
+
+
+
+
+
+
+
+
