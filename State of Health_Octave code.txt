@@ -1,0 +1,223 @@
+State Of Health
+
+
+%Code to simulate xLS methods
+
+% Tests the recursive performance of the xLS algorithms on a particular dataset
+% [Qhat , SigmaQ ] = xLSalgos (measX ,measY , SigmaX , SigmaY ,Gamma ,Qnom , SigmaY0 )
+% - measX = noisy z (2) -z(1)
+% - measY = noisy integral (i(t) /3600 dt)
+% - SigmaX = variance of X
+% - SigmaY = variance of Y
+% - Gamma = geometric forgetting factor ( Gamma = 1 for perfect memory )
+% - Qnom = nominal value of Q: if nonzero , used to initialize recursions
+% - SigmaY0 = variance of uncertainty of nominal capacity ( optional param .)
+%%
+- Qhat = estimate of capacity at every time step
+% - column 1 = WLS - weighted , recursive
+% - column 2 = WTLS - weighted , but not recursive
+% - column 3 = TLS - recursive TLS when SigmaX and SigmaY related by
+% constant multiple , sqrt ( SigmaX (1) / SigmaY (1))
+% - column 4 = AWTLS - recursive and weighted
+% - SigmaQ = variance of Q, columns correspond to methods same as for Qhat
+
+%Initializing xLSalgos variables
+
+function [Qhat , SigmaQ ]= xLSalgos (measX ,measY ,SigmaX , SigmaY ,Gamma ,Qnom , varargin )
+measX = measX (:) ; measY = measY (:) ; SigmaX = SigmaX (:) ; SigmaY = SigmaY (:) ;
+Qhat = zeros ( length ( measX ) ,4); SigmaQ = Qhat ;                                                                                                                      % Reserve some memory
+K = sqrt ( SigmaX (1) / SigmaY (1) );
+
+% Initialize some variables used for the recursive methods
+
+c1 = 0; c2 =0; c3 = 0;                                                                                                                                                                                              % unscaled
+C1 = 0; C2 =0; C3 = 0; C4 = 0; C5 = 0; C6 = 0;                                                                                                                                                % scaled by K
+if Qnom ~= 0,
+if ~ isempty ( varargin ), SigmaY0 = varargin {1}; else SigmaY0 = SigmaY (1) ; end
+c1 = 1/ SigmaY (1); c2 = Qnom / SigmaY (1) ; c3 = Qnom ^2/ SigmaY (1) ;
+C1 = 1/( K^2* SigmaY (1) ); C2 = K* Qnom /(K ^2* SigmaY (1) );
+C3 = K ^2* Qnom ^2/( K ^2* SigmaY (1) ); C4 = C1; C5 = C2; C6 = C3;
+end
+
+for iter = 1: length ( measX ),
+
+% update unscaled recursive parameter values
+
+c1 = Gamma *c1 + measX ( iter ) ^2/ SigmaY ( iter );
+c2 = Gamma *c2 + measX ( iter )* measY ( iter )/ SigmaY ( iter );
+c3 = Gamma *c3 + measY ( iter ) ^2/ SigmaY ( iter );
+
+% update scaled recursive parameter values
+
+C1 = Gamma *C1 + measX ( iter ) ^2/( K ^2* SigmaY ( iter ));
+C2 = Gamma *C2 + K* measX ( iter )* measY ( iter )/(K ^2* SigmaY ( iter ));
+C3 = Gamma *C3 + K ^2* measY ( iter ) ^2/( K ^2* SigmaY ( iter ));
+C4 = Gamma *C4 + measX ( iter ) ^2/ SigmaX ( iter );
+C5 = Gamma *C5 + K* measX ( iter )* measY ( iter )/ SigmaX ( iter );
+C6 = Gamma *C6 + K ^2* measY ( iter ) ^2/ SigmaX ( iter );
+
+% Method 1: WLS
+Q = c2 ./ c1; Qhat (iter ,1) = Q;
+H = 2* c1; SigmaQ (iter ,1) = 2/H;
+
+% Method 2: WTLS -- not recursive
+
+x = measX (1: iter ); SX = SigmaX (1: iter );                                                                                                                                      % x, variance of x, already " squared "
+y = measY (1: iter ); SY = SigmaY (1: iter );                                                                                                                                    % y, variance of y, already " squared "
+g = gamma .^(( iter -1) : -1:0) ';
+Q = Qhat (iter ,1) ;                                                                                                                                                                                        % initialize with WLS solution
+for k = 1:5 ,
+J = sum (g .*(2*( Q*x-y) .*( Q*y.* SX+x.* SY)) ./(( Q ^2* SX+SY) .^2) );
+H = sum (g .*(2* SY .^2.* x .^2+ SX .^2.*(6* Q ^2* y .^2 -4* Q ^3* x.*y) - SX .* SY .*(6* Q ^2* x .^2 -12* Q*x.*y +2* y .^2) ) ./(( Q ^2* SX+SY) .^3) );
+Q = Q - J/H;
+end
+Qhat (iter ,2) =Q;
+SigmaQ (iter ,2) =2/H;
+if SigmaQ (iter ,2) <0 || Q <0,                                                                                                                                                              % Sometimes WTLS fails to converge to soln
+Qhat (iter ,2) = NaN ; SigmaQ (iter ,2) =0;
+end
+
+% Method 3: TLS
+
+Q = (-c1+K ^2* c3+ sqrt ((c1 -K ^2* c3) ^2+4* K ^2* c2 ^2) ) /(2* K ^2* c2);
+Qhat (iter ,3) = Q;
+H = (( -4*K ^4* c2)*Q ^3+(6* K ^4* c3 -6* c1*K ^2) *Q ^2+ 12* c2*K ^2* Q +2*( c1 -K ^2* c3))/(Q ^2*K ^2+1) ^3;
+SigmaQ (iter ,3) = 2/H;
+
+% Method 4: AWTLS with pre - scaling
+r = roots ([ C5 (-C1 +2* C4 -C6) (3* C2 -3* C5) (C1 -2* C3+C6) -C2 ]);
+r = r(r== conj (r));                                                                                                                                                                                     % discard complex - conjugate roots
+r = r(r >0) ;                                                                                                                                                                                                    % discard negative roots
+Jr = ((1./( r .^2+1) .^2) .*( r .^4* C4 -2* C5*r .^3+( C1+C6)*r .^2 -2* C2*r+C3)) ';
+J = min (Jr);
+Q = r(Jr ==J);                                                                                                                                                                                              % keep Q that minimizes cost function
+
+H = (2/( Q ^2+1) ^4) *( -2* C5*Q ^5+(3* C1 -6* C4 +3* C6)*Q ^4+( -12* C2 +16* C5)*Q^3 +( -8* C1 +10* C3 +6* C4 -8* C6)*Q ^2+(12* C2 -6* C5)*Q+(C1 -2* C3+C6));
+Qhat (iter ,4) = Q/K;
+SigmaQ (iter ,4) = 2/H/K^2;
+end
+return
+
+Q0 = 10;                                                                                                                                                                                                        % actual new - cell capacity of cell
+maxI = 30* Q0;                                                                                                                                                                                          % must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                                    % 10- bit precision on current sensor
+slope = 0;
+Qnom = 0;                                                                                                                                                                                                  % nominal capacity , possibly used for initializaiton
+xmax = 0.2; xmin = -xmax ;                                                                                                                                                                % range of the x(i) variables
+m = 300;                                                                                                                                                                                                      % number of samples between updates
+theCase = 1;                                                                                                                                                                                              % fixed interval between updates
+socnoise = sqrt (2) *0.01;                                                                                                                                                                   % standard deviation of x(i)
+Gamma = 1;                                                                                                                                                                                               % forgetting factor
+plotTitle = 'HEV Scenario 1';
+runScenario
+
+n = 1000;                                                                                                                                                                                                     % number of data points collected
+Q = (Q0+ slope *(1: n)) ';                                                                                                                                                                    % evolution of true capacity over time
+x = (( xmax - xmin )* rand (n ,1) + xmin );                                                                                                                                   % true x(i), without noise
+y = Q.*x;                                                                                                                                                                                                     % true y(i), without noise
+binsize = 2* maxI / precisionI ;                                                                                                                                                       % resolution of current sensor
+rn1 = ones (n ,1);                                                                                                                                                                                     % init std . dev . for each measurement
+sx = socnoise * rn1 ;                                                                                                                                                                              % scale Gaussian std. dev .
+if theCase == 1,                                                                                                                                                                                       % the typical case
+rn2 = rn1 ;                                                                                                                                                                                                   % same scale on y(i) as x(i) noise
+sy = binsize * sqrt (m /12) /3600* rn2;                                                                                                                                         % std. dev . for y(i)
+else                                                                                                                                                                                                               % this case will be discussed for BEV scenario 3
+mu = log( mode )+ sigma ^2; m = 3600* lognrnd (mu ,sigma ,n ,1) ;
+sy = binsize * sqrt (m /12) /3600; % std. dev . for y(i)
+end
+x = x + sx .* randn (n ,1) ;                                                                                                                                                                   % measured x(i) data , including noise
+y = y + sy .* randn (n ,1) ;                                                                                                                                                                  % measured y(i) data , including noise
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%HEV application
+
+[Qhat , SigmaQ , Fit ] = xLSalgos (x,y,sx .^2 , sy .^2 , Gamma , Qnom );
+figure ; plot ( Qhat ); hold on                                                                                                                                                              % baseline plot of all estimates
+xlabel ('Algorithm update index ');
+ylabel ('Capacity estimate (Ah)');
+title ( sprintf ('%s: Capacity Estimates with Error Bounds ' ,plotTitle ));
+legend ('WLS ','WTLS ','TLS ','AWTLS ','location ','northeast ');
+plot ( Qhat +3* sqrt ( SigmaQ ),'linewidth ' ,0.5);
+plot (Qhat -3* sqrt ( SigmaQ ),'linewidth ' ,0.5);
+plot ( Qhat );                                                                                                                                                                                              % make sure estimate is plotted on top
+plot (1:n,Q,'k:','linewidth ' ,1);
+
+Q0 = 10;                                                                                                                                                                                                        % actual new - cell capacity of cell
+maxI = 30* Q0;                                                                                                                                                                                          % must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                                     % 10- bit precision on current sensor
+slope = 0;
+Qnom = 0.99* Q0;                                                                                                                                                                                   % ** nominal capacity , used for init . of recursive methods
+xmax = 0.2;
+ xmin = -xmax ;                                                                                                                                                                                          % range of the x(i) variables
+m = 300;                                                                                                                                                                                                        % number of samples between updates
+theCase = 1;                                                                                                                                                                                               % fixed interval between updates
+socnoise = sqrt (2) *0.01;                                                                                                                                                                    % standard deviation of x(i)
+Gamma = 1;                                                                                                                                                                                                % forgetting factor
+plotTitle = 'HEV Scenario 2';
+runScenario
+
+
+Q0 = 10;                                                                                                                                                                                                        % actual new - cell capacity of cell
+maxI = 30* Q0;                                                                                                                                                                                         % must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                                   % 10- bit precision on current sensor
+slope = -0.001;                                                                                                                                                                                          % ** change in capacity per iteration
+Qnom = 0.99* Q0;                                                                                                                                                                                  % nominal capacity , used for init . of recursive methods
+xmax = 0.2; xmin = -xmax ;                                                                                                                                                                 % range of the x(i) variables
+m = 300;                                                                                                                                                                                                       % number of samples between updates
+theCase = 1;                                                                                                                                                                                               % fixed interval between updates
+socnoise = sqrt (2) *0.01;                                                                                                                                                                    % standard deviation of x(i)
+Gamma = 0.99;                                                                                                                                                                                        % ** forgetting factor
+plotTitle = 'HEV Scenario 3';
+runScenario
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%EV simulation
+
+Q0 = 100;                                                                                                                                                                                                    % ** actual new - cell capacity of cell
+maxI = 5* Q0;                                                                                                                                                                                          % ** must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                                 % 10- bit precision on current sensor
+slope = 0;
+Qnom = 0.99* Q0;                                                                                                                                                                               % ** nominal capacity , used for init . of recursive methods
+xmax = 0.4; xmin = -xmax ;                                                                                                                                                              % ** range of the x(i) variables
+m = 7200;                                                                                                                                                                                                 % ** number of samples between updates
+theCase = 1;                                                                                                                                                                                           % fixed interval between updates
+socnoise = sqrt (2) *0.01;                                                                                                                                                                 % standard deviation of x(i)
+Gamma = 1;                                                                                                                                                                                           % forgetting factor
+plotTitle = 'EV Scenario 1';
+runScenario
+
+Q0 = 100;                                                                                                                                                                                               % actual new - cell capacity of cell
+maxI = 5* Q0;                                                                                                                                                                                     % must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                             % 10- bit precision on current sensor
+slope = 0;
+Qnom = 0.99* Q0;                                                                                                                                                                           % ** nominal capacity , used for init . of recursive methods
+xmax = 0.8; xmin = -xmax ;                                                                                                                                                          % ** range of the x(i) variables
+theCase = 2;                                                                                                                                                                                        % ** random interval between updates
+mode = 0.5; sigma = 0.6;                                                                                                                                                              % ** needed for case 2
+socnoise = 0.01;                                                                                                                                                                                 % ** standard deviation of x(i)
+Gamma = 1;                                                                                                                                                                                         % forgetting factor
+plotTitle = 'EV Scenario 2';
+runScenario
+
+Q0 = 100;                                                                                                                                                                                              % actual new - cell capacity of cell
+maxI = 5* Q0;                                                                                                                                                                                     % must be able to measure current up to +/- maxI
+precisionI = 1024;                                                                                                                                                                             % 10- bit precision on current sensor
+slope = -0.01;                                                                                                                                                                                      % ** changing total capacity
+Qnom = 0.99* Q0;                                                                                                                                                                           % nominal capacity , used for init . of recursive methods
+xmax = 0.8; xmin = -xmax ;                                                                                                                                                          % range of the x(i) variables
+theCase = 2; % random interval between updates
+mode = 0.5; sigma = 0.6; % needed for case 2
+socnoise = 0.01; % standard deviation of x(i)
+Gamma = 0.98; % ** forgetting factor
+plotTitle = 'EV Scenario 3';
+runScenario
+
+
+
+
+
+
+
+
