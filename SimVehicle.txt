@@ -1,0 +1,283 @@
+ELECTRIC VEHICLE SPECIAL
+
+Defining cell, module, battery
+
+% setup simulation of vehicle - pass on to simVehicle .m
+
+function results = setupSimVehicle
+files = {'nycc . txt ','udds . txt ','us06 . txt ','hwy . txt '};
+
+% Setup the Chevy Volt
+% set up cell : capacity [Ah], weight [g], (vmax , vnom , vmin ) [V]
+
+cell = setupCell (15 ,450 ,4.2 ,3.8 ,3.0) ;
+
+% set up module : number of cells in parallel , number of cells in
+% series , overhead of module by fraction of total cells ' weight
+
+module = setupModule (3 ,8 ,0.08 , cell );
+
+% set up battery : number of modules in series , overhead of battery by
+% fraction of total modules ' weight , ( full SOC , empty SOC ) [%] ,
+% efficiency for this module
+
+Defining motor, wheel, drivetrain, vehicle
+
+% set up motor : max torque " Lmax " [Nm], ( RPMrated , RPMmax )
+% [RPM ], efficiency , inertia [kg/m2]
+
+motor = setupMotor (275 ,4000 ,12000 ,0.95 ,0.2) ;
+
+% set up wheel : radius [m], inertia [kg/m2], rollCoef
+
+wheel = setupWheel (0.35 ,8 ,0.0111) ;
+
+% set up drivetrain : inverter efficiency , fractional regen torque
+% limit , gear ratio , gear inertia [kg/m2], gear efficiency for this
+% battery , motor , and wheel
+
+drivetrain = setupDrivetrain (0.94 ,0.9 ,12 ,0.05 ,0.97 , battery ,motor , wheel );
+
+% set up vehicle : # wheels , roadForce [N], Cd , frontal area [m2],
+% weight [kg], payload [kg], overhead power [W] for this drivetrain
+
+vehicle = setupVehicle (4 ,0 ,0.22 ,1.84 ,1425 ,75 ,200 , drivetrain );
+
+Performing the simulation
+
+fprintf ('\n\ nStarting sims ...\ n');
+for theCycle = 1: length ( files ),
+cycle = dlmread ( files { theCycle },'\t' ,2 ,0);
+results = simVehicle ( vehicle ,cycle ,0.3) ;
+range = ( vehicle . drivetrain . battery . socFull - ...
+vehicle . drivetrain . battery . socEmpty )
+( vehicle . drivetrain . battery . socFull - results . batterySOC (end )) * results . distance ( end );
+
+fprintf ('Cycle = %s, range = %6.1 f [km ]\n',files { theCycle }, range );
+end
+end
+
+%Setting up the cell data structure
+
+function cell = setupCell ( capacity , weight ,vmax ,vnom , vmin )
+cell . capacity = capacity ;                                                                                                                                                                                                                   % ampere hours
+cell . weight = weight ;                                                                                                                                                                                                                         % grams
+cell . vmax = vmax ;                                                                                                                                                                                                                                % volts
+cell . vnom = vnom ;                                                                                                                                                                                                                               % volts
+cell . vmin = vmin ;                                                                                                                                                                                                                                  % volts
+cell . energy = vnom * capacity ;                                                                                                                                                                                                    % Watt - hours
+cell . specificEnergy = 1000 * cell . capacity * cell . vnom / ...
+cell . weight ;                                                                                                                                                                                                                                            % Wh/kg
+end
+
+%Setting up the module data structure
+
+function module = setupModule ( numParallel , numSeries , overhead , cell )
+module . numParallel = numParallel ;
+module . numSeries = numSeries ;
+module . overhead = overhead ;
+module . cell = cell ;
+module . numCells = numParallel * numSeries ;
+module . capacity = numParallel * cell . capacity ;
+module . weight = module . numCells * cell . weight * 1/(1 - overhead ) /1000; % kg
+module . energy = module . numCells * cell . energy /1000; % kWh
+module . specificEnergy = 1000 * module . energy / module . weight ; % Wh/kg
+end
+
+%Setting up the battery data structure
+
+function battery = setupPack ( numSeries , overhead , socFull ,socEmpty , efficiency , module )
+battery . numSeries = numSeries ;
+battery . overhead = overhead ;
+battery . module = module ;
+battery . socFull = socFull ;
+battery . socEmpty = socEmpty ;                                                                                                                                                                                         % unitless
+battery . efficiency = efficiency ;                                                                                                                                                                                            % unitless , captures I*I*R losses
+battery . numCells = module . numCells * numSeries ;
+battery . weight = module . weight * numSeries * 1/(1 - overhead );                                                                                                                % kg
+battery . energy = module . energy * numSeries ;                                                                                                                                                       % kWh
+battery . specificEnergy = 1000 * battery . energy / battery . weight ;                                                                                                            % Wh/kg
+battery . vmax = numSeries * module . numSeries * module . cell . vmax ;
+battery . vnom = numSeries * module . numSeries * module . cell . vnom ;
+battery . vmin = numSeries * module . numSeries * module . cell . vmin ;
+end
+
+%Setting up the motor, wheel data structures
+
+function wheel = setupWheel ( radius , inertia , rollCoef )
+wheel . radius = radius ;                                                                                                                                                                                                                 % m
+wheel . inertia = inertia ;                                                                                                                                                                                                               % km -m2
+wheel . rollCoef = rollCoef ;
+end
+function motor = setupMotor (Lmax , RPMrated , RPMmax , efficiency , inertia )
+motor . Lmax = Lmax ;                                                                                                                                                                                                                  % N-m
+motor . RPMrated = RPMrated ;
+motor . RPMmax = RPMmax ;
+motor . efficiency = efficiency ;
+motor . inertia = inertia ;                                                                                                                                                                                                              %kg -m2
+motor . maxPower = 2* pi* Lmax * RPMrated /60000;                                                                                                                                                % kW
+end
+
+Setting up the drivetrain data structure
+
+function drivetrain = setupDrivetrain ( inverterEfficiency ,regenTorque , gearRatio , gearInertia , gearEfficiency , battery ,motor , wheel )
+drivetrain . inverterEfficiency = inverterEfficiency ;
+
+% regen torque is fraction of braking power that is used to charge
+% battery ; e.g., value of 0.9 means 90% of braking power contributes
+% to charging battery ; 
+10% lost to heat in friction brakes
+
+drivetrain . regenTorque = regenTorque ;
+drivetrain . battery = battery ;
+drivetrain . motor = motor ;
+drivetrain . wheel = wheel ;
+drivetrain . gearRatio = gearRatio ;
+drivetrain . gearInertia = gearInertia ;                                                                                                                                                                                  % kg -m2 , measured on motor side
+drivetrain . gearEfficiency = gearEfficiency ;
+drivetrain . efficiency = battery . efficiency * inverterEfficiency *motor . efficiency * gearEfficiency ;
+end
+
+%Setting up the vehicle data structure
+
+function vehicle = setupVehicle ( wheels , roadForce ,Cd ,A ,weight , payload , overheadPwr , drivetrain )
+
+vehicle . drivetrain = drivetrain ;
+vehicle . wheels = wheels ;                                                                                                                                                                                                       % number of them
+vehicle . roadForce = roadForce ;                                                                                                                                                                                        % N
+vehicle .Cd = Cd;                                                                                                                                                                                                                            % drag coeff
+vehicle .A = A;                                                                                                                                                                                                                                 % frontal area , m2
+vehicle . weight = weight ;                                                                                                                                                                                                      % kg
+vehicle . overheadPwr = overheadPwr ;                                                                                                                                                                           % W
+vehicle . maxWeight = weight + drivetrain . battery . weight + payload ;
+vehicle . rotWeight = (( drivetrain . motor . inertia + drivetrain . gearInertia ) *drivetrain . gearRatio ^2 + drivetrain . wheel . inertia * wheels ) /drivetrain . wheel . radius ^2;
+vehicle . equivMass = vehicle . maxWeight + vehicle . rotWeight ;
+vehicle . maxSpeed = 2* pi * drivetrain . wheel . radius * drivetrain . motor . RPMmax * 60 / (1000 * drivetrain . gearRatio );                               % km/h
+end
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%simVehicle.m
+
+% results = simVehicle(vehicle ,cycle ,grade)
+% - simulate vehicle defined by "vehicle", e.g., created via setupSimVehicle.m
+% - cycle is Nx2: column 1 = time (s); column 2 = desired speed (mph)
+% - grade is road grade in percent - either a constant grade for all
+% time , or a different grade value for every point in time
+
+function results = simVehicle(vehicle ,cycle ,grade)
+rho = 1.225;                                                                                                                                                                                                                                                               % air density , kg/m3
+results.vehicle = vehicle;
+results.cycle = cycle;                                                                                                                                                                                                                                            % time in s, desired speed in miles/hour
+results.time = cycle (: ,1);                                                                                                                                                                                                                                  % s
+results.grade = atan(grade /100);                                                                                                                                                                                                 % convert percent to radians
+if isscalar(grade),
+results.grade = repmat(results.grade ,size(results.time));
+end
+
+results.desSpeedKPH = cycle (: ,2) * 1.609344;                                                                                                                                                                  % convert to km/h
+results.desSpeed = min(vehicle.maxSpeed ,results.desSpeedKPH *1000/3600);                                                                                          % m/s
+
+%Preallocate storage for results to be computed
+
+results.desAccel = zeros(size(results.desSpeed));                                                                                                                                                          % m/s2
+results.desAccelForce = zeros(size(results.desSpeed));                                                                                                                                              % N
+results.aeroForce = zeros(size(results.desSpeed));                                                                                                                                                       % N
+results.rollGradeForce = zeros(size(results.desSpeed));                                                                                                                                             % N
+results.demandTorque = zeros(size(results.desSpeed));                                                                                                                                           % N-m
+results.maxTorque = zeros(size(results.desSpeed));                                                                                                                                                    % N-m
+results.limitRegen = zeros(size(results.desSpeed));                                                                                                                                                    % N-m
+results.limitTorque = zeros(size(results.desSpeed));                                                                                                                                                   % N-m
+
+% and so forth ... also preallocate (zeroed out) storage for
+% results.motorTorque (N-m), results.demandPower (kW)
+% results.limitPower (kW), results.batteryDemand (kW)
+% results.current (A), results.batterySOC (0..100)
+% results.actualAccelForce (N), results.actualAccel (m/s2)
+% results.motorSpeed (RPM), results.actualSpeed (m/s)
+% results.actualSpeedKPH (km/h), results.distance (km)
+
+%Start simulation, compute desired forces
+
+prevSpeed = 0; 
+prevMotorSpeed = 0; 
+prevDistance = 0;
+prevTime = results.time (1) - 1;
+ prevSOC = vehicle.drivetrain.battery.socFull;
+
+for k = 1:length(results.desSpeed),
+results.desAccel(k) = (results.desSpeed(k) - prevSpeed)/(results.time(k) - prevTime);
+results.desAccelForce(k) = vehicle.equivMass * results.desAccel(k);
+results.aeroForce(k) = 0.5 * rho * vehicle.Cd * vehicle.A * prevSpeed ^2;
+results.rollGradeForce(k) = vehicle.maxWeight * 9.81 * sin(results.grade(k));
+
+if abs(prevSpeed) > 0,
+results.rollGradeForce(k) = results.rollGradeForce(k) + vehicle.drivetrain.wheel.rollCoef * vehicle.maxWeight * 9.81;
+end
+
+%Compute desired torques, limit them
+
+results.demandTorque(k) = (results.desAccelForce(k) + ...
+results.aeroForce(k) + results.rollGradeForce(k) + vehicle.roadForce) *vehicle.drivetrain.wheel.radius / vehicle.drivetrain.gearRatio;
+if prevMotorSpeed < vehicle.drivetrain.motor.RPMrated ,
+results.maxTorque(k) = vehicle.drivetrain.motor.Lmax;
+else
+
+results.maxTorque(k) = vehicle.drivetrain.motor.Lmax * vehicle.drivetrain.motor.RPMrated / prevMotorSpeed;
+end
+
+results.limitRegen(k) = min(results.maxTorque(k) ,vehicle.drivetrain.regenTorque * vehicle.drivetrain.motor.Lmax);
+results.limitTorque(k) = min(results.demandTorque(k),results.maxTorque(k));
+
+if results.limitTorque(k) > 0,
+results.motorTorque(k) = results.limitTorque(k);
+else
+
+results.motorTorque(k) = max(-results.limitRegen(k) ,results.limitTorque(k));
+end
+
+%Compute actual speed, distance
+
+results.actualAccelForce(k) = results.limitTorque(k) *vehicle.drivetrain.gearRatio / vehicle.drivetrain.wheel.radius - ...
+results.aeroForce(k) - results.rollGradeForce(k) - vehicle.roadForce;
+results.actualAccel(k) = results.actualAccelForce(k) / vehicle.equivMass;
+results.motorSpeed(k) = min(vehicle.drivetrain.motor.RPMmax ,vehicle.drivetrain.gearRatio * (prevSpeed + results.actualAccel(k) *(results.time(k) - prevTime))*60 / (2*pi*vehicle.drivetrain.wheel.radius));
+
+results.actualSpeed(k) = results.motorSpeed(k) * 2*pi*vehicle.drivetrain.wheel.radius / (60 * vehicle.drivetrain.gearRatio);
+results.actualSpeedKPH(k) = results.actualSpeed(k) * 3600/1000;
+deltadistance = (results.actualSpeed(k) + prevSpeed)/2 *...(results.time(k) - prevTime)/1000;
+results.distance(k) = prevDistance + deltadistance;
+
+%Computing motor and battery power demands
+
+if results.limitTorque(k) > 0,
+results.demandPower(k) = results.limitTorque(k);
+else
+results.demandPower(k) = max(results.limitTorque(k),-results.limitRegen(k));
+end
+
+results.demandPower(k) = results.demandPower(k) * 2*pi * (prevMotorSpeed + results.motorSpeed(k)) / 2 / 60000;
+results.limitPower(k) = max(-vehicle.drivetrain.motor.maxPower ,min(vehicle.drivetrain.motor.maxPower ,results.demandPower(k)));
+results.batteryDemand(k) = vehicle.overheadPwr /1000;
+
+if results.limitPower(k) > 0,
+results.batteryDemand(k) = results.batteryDemand(k) + results.limitPower(k)/vehicle.drivetrain.efficiency;
+else
+results.batteryDemand(k) = results.batteryDemand(k) + results.limitPower(k)*vehicle.drivetrain.efficiency;
+end
+
+%Update battery SOC, storing results
+
+results.current(k) = results.batteryDemand(k)*1000/vehicle.drivetrain.battery.vnom;
+results.batterySOC(k) = prevSOC - results.current(k) * (results.time(k) - prevTime) / (36*vehicle.drivetrain.battery.module.capacity);
+
+prevTime = results.time(k);
+prevSpeed = results.actualSpeed(k);
+prevMotorSpeed = results.motorSpeed(k);
+prevSOC = results.batterySOC(k);
+prevDistance = results.distance(k);
+
+end
+
+
+
