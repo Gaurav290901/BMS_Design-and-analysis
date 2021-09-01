@@ -1,0 +1,751 @@
+State of Charge Implementation
+
+We are using Kalman filter for estimationg our soc.
+
+Source code for implementaion of  simple kalman filter.
+
+----------------------------------------------------------------------------------------
+
+% Initialize simulation variables
+
+SigmaW = 1;                                                                                                                      % Process noise covariance
+SigmaV = 1;                                                                                                                       % Sensor noise covariance
+A = 1; B = 1; C = 1; D = 0;                                                                                               % Plant definition matrices
+maxIter = 40;                                                                                                                    % Number of iterations to execute simulation
+xtrue = 0;                                                                                                                             % Initialize true system initial state
+xhat = 0;                                                                                                                              % Initialize Kalman filter initial estimate
+SigmaX = 0;                                                                                                                       % Initialize Kalman filter covariance
+u = 0;                                                                                                                                      % Unknown initial driving input : assume zero
+
+% Reserve storage for variables we want to plot / evaluate
+
+xstore = zeros ( length ( xtrue ),maxIter +1) ; xstore (: ,1) = xtrue ;
+xhatstore = zeros ( length ( xhat ),maxIter );
+SigmaXstore = zeros ( length ( xhat )^2, maxIter );
+
+% KF step 1
+
+for k = 1: maxIter ,
+
+% KF Step 1a: State estimate time update
+
+xhat = A* xhat + B*u;                                                                                                                 % use prior value of "u"
+
+% KF Step 1b: Error covariance time update
+
+SigmaX = A* SigmaX *A' + SigmaW ;
+
+% [ Implied operation of system in background , with
+% input signal u, and output signal z]
+
+u = 0.5* randn (1) + cos (k/pi);                                                                                                  % for example ...
+w = chol ( SigmaW ) '* randn ( length ( xtrue ));
+v = chol ( SigmaV ) '* randn ( length (C* xtrue ));
+ytrue = C* xtrue + D*u + v;                                                                                                        % z is based on present x and u
+xtrue = A* xtrue + B*u + w;                                                                                                       % future x is based on present u
+
+% KF Step 1c: Estimate system output
+
+yhat = C* xhat + D*u;
+
+%KF step 2
+
+% KF Step 2a: Compute Kalman gain matrix
+
+SigmaY = C* SigmaX *C' + SigmaV ;
+L = SigmaX *C '/ SigmaY ;
+
+% KF Step 2b: State estimate measurement update
+
+xhat = xhat + L*( ytrue - yhat );
+
+% KF Step 2c: Error covariance measurement update
+
+SigmaX = SigmaX - L* SigmaY *L ';
+
+% [ Store information for evaluation / plotting purposes ]
+
+xstore (:,k +1) = xtrue ; xhatstore (:,k) = xhat ;
+SigmaXstore (:,k) = SigmaX (:) ;
+end
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+%Plotting the Graph of simple kalman filter.
+figure (1) ; 
+clf ;
+plot (0: maxIter -1, xstore (1: maxIter ) ','k-' , 0: maxIter -1, xhatstore ','b--', 0: maxIter -1, xhatstore '+3* sqrt ( SigmaXstore ) ','m -. ' ,0: maxIter -1, xhatstore ' -3* sqrt ( SigmaXstore ) ','m -. '); grid ;
+legend ('true ','estimate ','bounds ');
+title ('Kalman filter in action ');
+xlabel ('Iteration '); ylabel ('State ');
+
+figure (2) ;
+ clf ;
+plot (0: maxIter -1, xstore (1: maxIter ) '-xhatstore ','b-' , 0: maxIter -1 ,3* sqrt ( SigmaXstore ) ','m--' , 0: maxIter -1 , -3* sqrt ( SigmaXstore ) ','m--'); grid ;
+legend ('Error ','bounds ' ,0); title ('Error with bounds ');
+xlabel ('Iteration ');
+ ylabel ('Estimation Error ');
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%Extended Kalman Filter 
+
+% Initialize simulation variables
+
+SigmaW = 1; % Process noise covariance
+SigmaV = 2; % Sensor noise covariance
+maxIter = 40;
+xtrue = 2 + randn (1) ;                                                                                                                    % Initialize true system initial state
+xhat = 2;                                                                                                                                              % Initialize Kalman filter initial estimate
+SigmaX = 1;                                                                                                                                       % Initialize Kalman filter covariance
+u = 0;                                                                                                                                                     % Unknown initial driving input : assume zero
+
+% Reserve storage for variables we might want to plot / evaluate
+
+xstore = zeros ( maxIter +1, length ( xtrue )); xstore (1 ,:) = xtrue ;
+xhatstore = zeros ( maxIter , length ( xhat ));
+SigmaXstore = zeros ( maxIter , length ( xhat )^2) ;
+
+for k = 1: maxIter ,
+
+% EKF Step 1a: State estimate time update
+% ( First compute Ahat , Bhat : Specifics depend on model !)
+% Note : For this example , x(k +1) = sqrt (5+ x(k)) + w(k)
+% Note : We will insert our system 's f (...) equation here
+
+Ahat = 0.5/ sqrt (5+ xhat ); Bhat = 1;
+xhat = sqrt (5+ xhat );
+
+% EKF Step 1b: Error covariance time update
+
+SigmaX = Ahat * SigmaX *Ahat ' + Bhat * SigmaW *Bhat ';
+
+% [Co - simulate system , with input signal u, and output signal y]
+
+w = chol ( SigmaW ) '* randn (1) ;
+v = chol ( SigmaV ) '* randn (1) ;
+ytrue = xtrue ^3 + v;                                                                                                                        % y is based on present x and u
+xtrue = sqrt (5+ xtrue ) + w;                                                                                                         % future x is based on present u
+
+
+% EKF Step 1c: Estimate system output
+% ( First compute Ahat , Bhat : Specifics depend on model !)
+% Note : For this example , y(k) = x(k)^3
+% Note : You need to insert your system 's h (...) equation here
+
+Chat = 3* xhat ^2; Dhat = 1;
+yhat = xhat ^3;
+
+% EKF Step 2a: Compute Kalman gain matrix
+
+SigmaY = Chat * SigmaX *Chat ' + Dhat * SigmaV *Dhat ';
+L = SigmaX *Chat '/ SigmaY ;
+
+% EKF Step 2b: State estimate measurement update
+
+xhat = xhat + L*( ytrue - yhat );
+xhat = max (-5, xhat );                                                                                                                         % don 't get square root of negative xhat !
+
+% EKF Step 2c: Error covariance measurement update
+
+SigmaX = SigmaX - L* SigmaY *L ';
+[~,S,V] = svd ( SigmaX );
+HH = V*S*V ';
+SigmaX = ( SigmaX + SigmaX ' + HH + HH ') /4;                                                                       % Help to keep robust
+
+% [ Store information for evaluation / plotting purposes ]
+
+xstore (k+1 ,:) = xtrue ; xhatstore (k ,:) = xhat ;
+SigmaXstore (k ,:) = ( SigmaX (:) ) ';
+end ;
+
+%Plotting Extended Kalman Filter.
+
+subplot (1 ,2 ,1);
+t = 0: maxIter -1;
+plot (t, xstore (1: maxIter ),'k-',t, xhatstore ,'b--', t, xhatstore +3* sqrt ( SigmaXstore ),'m -. ' ,t, xhatstore -3* sqrt ( SigmaXstore ),'m -. '); grid ;
+legend ('true ','estimate ','bounds ');
+xlabel ('Iteration '); ylabel ('State ');
+title ('Extended Kalman filter in action ');
+subplot (1 ,2 ,2);
+
+plot (t, xstore (1: maxIter )-xhatstore ,'b-',t, 3* sqrt ( SigmaXstore ),'m--',t , -3* sqrt ( SigmaXstore ),'m--');
+grid ; legend ('Error ','bounds ' ,0);
+title ('EKF Error with bounds ');
+xlabel ('Iteration ');
+ylabel ('Estimation error ');
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+% For increasing Efficency of our model
+% Find dOCV /dz at SOC = z from {SOC ,OCV } data
+
+function dOCVz = dOCVfromSOC (SOC ,OCV ,z)
+dZ = SOC (2) - SOC (1) ;                                                                                                                                                      % Find spacing of SOC vector
+dUdZ = diff ( OCV )/dZ;                                                                                                                                                       % Scaled forward finite difference
+dOCV = ([ dUdZ (1) dUdZ ] + [ dUdZ dUdZ ( end)]) /2;                                                                                     % Avg of fwd / bkwd diffs
+dOCVz = interp1 (SOC ,dOCV ,z);                                                                                                                                % Could make more efficient than this ...
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%Implementing EKF on ESC model
+% Load cell model , cell - test data ( incl . variable " DYNData " of which the field
+% " script1 " is of interest ). It has sub - fields time , current , voltage , soc .
+
+load CellModel                                                                                                                                                                      % loads " model " of cell
+load (' Cell_DYN_P25 ');                                                                                                                                                   % loads data from cell test
+T = 25;                                                                                                                                                                                         % Test temperature
+time = DYNData . script1 . time (:) ; deltat = time (2) -time (1);
+time = time - time (1) ;                                                                                                                                                      % start time at 0
+current = DYNData . script1 . current (:) ;                                                                                                               % discharge > 0; charge < 0.
+voltage = DYNData . script1 . voltage (:) ;
+soc = DYNData . script1 . soc (:) ;
+
+%Wapper Code
+
+% Reserve storage for computed results , for plotting
+
+sochat = zeros ( size ( soc ));
+socbound = zeros ( size ( soc ));
+
+% Covariance values
+
+SigmaX0 = diag ([1e -3 1e -3 1e -2]) ;                                                                                                                        % uncertainty of initial state
+SigmaV = 2e -1;                                                                                                                                                                   % uncertainty of voltage sensor , output equation
+SigmaW = 1e1;                                                                                                                                                                     % uncertainty of current sensor , state equation
+
+% Create ekfData structure and initialize variables using first
+% voltage measurement and first temperature measurement
+
+ekfData = initEKF ( voltage (1) ,T, SigmaX0 , SigmaV ,SigmaW , model );
+
+% Now , enter loop for remainder of time , where we update the EKF
+% once per sample interval
+
+hwait = waitbar (0, 'Computing ... ');
+for k = 1: length ( voltage ),
+vk = voltage (k);                                                                                                                                                                   % " measure " voltage
+ik = current (k);                                                                                                                                                                      % " measure " current
+Tk = T;                                                                                                                                                                                         % " measure " temperature
+
+% Update SOC ( and other model states )
+
+[ sochat (k),socbound (k),ekfData ] = iterEKF (vk ,ik ,Tk ,deltat , ekfData );
+
+% update waitbar periodically , but not too often ( slow procedure )
+
+if mod (k ,1000) ==0 , waitbar (k/ length ( current ),hwait ); end;
+end
+close ( hwait );
+
+figure ; plot ( time /60 ,100* sochat , time /60 ,100* soc ); hold on
+plot ([ time /60; NaN ; time /60] , [100*( sochat + socbound ); NaN ; 100*( sochat - socbound )]);
+
+title ('SOC estimation using EKF ');
+ xlabel ('Time (min )');
+ ylabel ('SOC (%) ');
+legend ('Estimate ','Truth ','Bounds '); grid on
+fprintf ('RMS SOC estimation error = %g %%\ n',sqrt ( mean ((100*( soc - sochat )) .^2) ));
+
+figure ; plot ( time /60 ,100*( soc - sochat )); hold on
+plot ([ time /60; NaN ; time /60] ,[100* socbound ; NaN ; -100* socbound ]);
+title ('SOC estimation errors using EKF ');
+xlabel ('Time ( min)');
+ ylabel ('SOC error (%) ');
+ ylim ([ -4 4]) ;
+legend ('Estimation error ','Bounds '); grid on
+ind = find ( abs (soc - sochat )>socbound );
+fprintf ('Percent of time error outside bounds = %g %%\ n' , length (ind )/ length (soc ) *100) ;
+
+function ekfData = initEKF (v0 ,T0 , SigmaX0 , SigmaV , SigmaW , model )
+
+% Initial state description
+
+ir0 = 0; ekfData . irInd = 1;
+hk0 = 0; ekfData . hkInd = 2;
+SOC0 = SOCfromOCVtemp (v0 ,T0 , model ); ekfData . zkInd = 3;
+ekfData . xhat = [ ir0 hk0 SOC0 ]';                                                                                                                                      % initial state
+
+% Covariance values
+
+ekfData . SigmaX = SigmaX0 ; ekfData . SigmaV = SigmaV ;
+ekfData . SigmaW = SigmaW ; ekfData . Qbump = 5;
+
+% previous value of current ( and its sign )
+
+ekfData . priorI = 0; ekfData . signIk = 0;
+
+% store model data structure too
+
+ekfData . model = model ;
+end
+
+function [zk ,zkbnd , ekfData ] = iterEKF (vk ,ik ,Tk , deltat , ekfData )
+model = ekfData . model ;
+
+% Load the cell model parameters
+
+Q = getParamESC ('QParam ',Tk , model );
+G = getParamESC ('GParam ',Tk , model );
+M = getParamESC ('MParam ',Tk , model );
+M0 = getParamESC ('M0Param ',Tk , model );
+RC = exp(- deltat ./ abs ( getParamESC ('RCParam ',Tk , model ))) ';
+R = getParamESC ('RParam ',Tk , model ) ';
+R0 = getParamESC ('R0Param ',Tk , model );
+eta = getParamESC ('etaParam ',Tk , model );
+if ik <0, ik=ik* eta ; end ;
+
+% Get data stored in ekfData structure
+
+I = ekfData . priorI ;
+SigmaX = ekfData . SigmaX ;
+SigmaV = ekfData . SigmaV ;
+SigmaW = ekfData . SigmaW ;
+xhat = ekfData . xhat ;
+irInd = ekfData . irInd ;
+hkInd = ekfData . hkInd ;
+zkInd = ekfData . zkInd ;
+if abs (ik)>Q/100 , ekfData . signIk = sign (ik); end ;
+signIk = ekfData . signIk ;
+
+% Step 1a: Compute Ahat [k -1] , Bhat [k -1]; Then , state estimate time update
+
+nx = length ( xhat ); Ahat = zeros (nx ,nx); Bhat = zeros (nx ,1);
+Ahat (zkInd , zkInd ) = 1; Bhat ( zkInd ) = -deltat /(3600* Q);
+Ahat (irInd , irInd ) = diag (RC); Bhat ( irInd ) = 1-RC (:) ;
+Ah = exp (- abs (I*G* deltat /(3600* Q)));                                                                                                                                         % hysteresis factor
+Ahat (hkInd , hkInd ) = Ah;
+B = [Bhat , 0* Bhat ];
+Bhat ( hkInd ) = -abs (G* deltat /(3600* Q))*Ah *(1+ sign (I)* xhat ( hkInd ));
+B(hkInd ,2) = Ah -1;
+xhat = Ahat * xhat + B*[I; sign (I)];
+
+% Step 1b: Error covariance time update
+% sigmaminus (k) = Ahat (k -1) * sigmaplus (k -1) * Ahat (k -1) ' +  Bhat (k -1)* sigmawtilde * Bhat (k -1) '
+
+SigmaX = Ahat * SigmaX *Ahat ' + Bhat * SigmaW *Bhat ';
+
+% Step 1c: Output estimate
+
+yhat = OCVfromSOCtemp ( xhat ( zkInd ),Tk , model ) + M0* signIk + M* xhat ( hkInd ) - R* xhat ( irInd ) - R0*ik;
+
+% Step 2a: Estimator gain matrix
+
+Chat = zeros (1, nx);
+Chat ( zkInd ) = dOCVfromSOCtemp ( xhat ( zkInd ),Tk , model );
+Chat ( hkInd ) = M;
+Chat ( irInd ) = -R;
+Dhat = 1;
+SigmaY = Chat * SigmaX *Chat ' + Dhat * SigmaV *Dhat ';
+L = SigmaX *Chat '/ SigmaY ;
+
+% Step 2b: State estimate measurement update
+
+r = vk - yhat ;                                                                                                                                                                              % residual . Use to check for sensor errors ...
+if r^2 > 100* SigmaY , L (:) =0.0; end
+xhat = xhat + L*r;
+xhat ( hkInd ) = min (1, max (-1, xhat ( hkInd )));                                                                                                    % Help maintain robustness
+xhat ( zkInd ) = min (1.05 , max ( -0.05 , xhat ( zkInd )));
+
+% Step 2c: Error covariance measurement update
+
+SigmaX = SigmaX - L* SigmaY *L ';
+if r^2 > 4* SigmaY , % bad voltage estimate by 2 std . devs , bump SigmaX
+fprintf ('Bumping SigmaX \n');
+SigmaX (zkInd , zkInd ) = SigmaX (zkInd , zkInd )* ekfData . Qbump ;
+end
+
+[~,S,V] = svd ( SigmaX );
+HH = V*S*V ';
+SigmaX = ( SigmaX + SigmaX ' + HH + HH ') /4;                                                                                                  % Help maintain robustness
+
+% Save data in ekfData structure for next time ...
+
+ekfData . priorI = ik;
+ekfData . SigmaX = SigmaX ;
+ekfData . xhat = xhat ;
+zk = xhat ( zkInd );
+zkbnd = 3* sqrt ( SigmaX (zkInd , zkInd ));
+end
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%Sigma Point Kalman Filter Simulation
+
+% Define size of variables in model
+
+Nx = 1;                                                                                                                                                                                         % state = 1x1 scalar
+Nxa = 3;                                                                                                                                                                                       % augmented state has also w(k) and v(k) contributions
+Ny = 1;                                                                                                                                                                                         % output = 1x1 scalar
+
+% Some constants for the SPKF algorithm . Use standard values for
+% cases with Gaussian noises . ( These are the weighting matrices comprising the values of alpha (c) and alpha (m) organized in a way to make later computation efficient ).
+
+h = sqrt (3) ;
+Wmx (1) = (h*h- Nxa )/(h*h); Wmx (2) = 1/(2* h*h);
+Wcx = Wmx ;
+Wmxy = [ Wmx (1) repmat (Wmx (2) ,[1 2* Nxa ]) ]';
+
+% Initialize simulation variables
+
+SigmaW = 1;                                                                                                                                                                            % Process noise covariance
+SigmaV = 2;                                                                                                                                                                             % Sensor noise covariance
+maxIter = 40;
+xtrue = 2 + randn (1) ;                                                                                                                                                          % Initialize true system initial state
+xhat = 2;                                                                                                                                                                                    % Initialize Kalman filter initial estimate
+SigmaX = 1;                                                                                                                                                                             % Initialize Kalman filter covariance
+
+% Reserve storage for variables we might want to plot / evaluate
+
+xstore = zeros ( maxIter +1, length ( xtrue )); xstore (1 ,:) = xtrue ;
+xhatstore = zeros ( maxIter , length ( xhat ));
+SigmaXstore = zeros ( maxIter , length ( xhat )^2) ;
+
+for k = 1: maxIter ,
+
+% SPKF Step 1a: State estimate time update
+% 1a-i: Calculate augmented state estimate , including xhata = [ xhat ; 0; 0]; % process and sensor noise mean
+% 1a-ii: Get desired Cholesky factor
+
+Sigmaxa = blkdiag (SigmaX , SigmaW , SigmaV );
+sSigmaxa = chol ( Sigmaxa ,'lower ');
+
+% 1a- iii : Calculate sigma points ( strange indexing of xhat to avoid
+% " repmat " call , which is very inefficient in Matlab )
+
+X = xhata (:, ones ([1 2* Nxa +1]) ) + h*[ zeros ([ Nxa 1]) , sSigmaxa , -sSigmaxa ];
+
+% 1a-iv: Calculate state equation for every element
+% Hard - code equation here for efficiency
+
+Xx = sqrt (5+X(1 ,:)) + X(2 ,:);
+xhat = Xx* Wmxy ;
+
+% SPKF Step 1b: Covariance of prediction
+
+Xs = Xx - xhat (:, ones ([1 2* Nxa ]));
+SigmaX = Xs* diag ( Wmxy )*Xs ';
+
+% [ Implied operation of system in background , with
+% input signal u, and output signal y]
+
+w = chol ( SigmaW ) '* randn (1) ;
+v = chol ( SigmaV ) '* randn (1) ;
+ytrue = xtrue ^3 + v;                                                                                                                                                              % y is based on present x and u
+xtrue = sqrt (5+ xtrue ) + w;                                                                                                                                              % future x is based on present u
+
+% SPKF Step 1c: Create output estimate
+% Hard - code equation here for efficiency
+
+Y = Xx .^3 + X(3 ,:);
+yhat = Y* Wmxy ;
+
+% SPKF Step 2a: Estimator gain matrix
+
+Ys = Y - yhat * ones ([1 2* Nxa ]);
+SigmaXY = Xs* diag ( Wmxy )*Ys ';
+SigmaY = Ys* diag ( Wmxy )*Ys ';
+Lx= SigmaXY / SigmaY ;
+
+% SPKF Step 2b: Measurement state update
+
+xhat = xhat + Lx *( ytrue - yhat );                                                                                                                             % update prediction to estimate
+xhat = max (-5, xhat );                                                                                                                                                    % don 't get square root of negative
+
+% SPKF Step 2c: Measurement covariance update
+
+SigmaX = SigmaX - Lx* SigmaY *Lx ';
+[~,S,V] = svd ( SigmaX );
+HH = V*S*V ';
+SigmaX = ( SigmaX + SigmaX ' + HH + HH ') /4;                                                                                              % Help to keep robust
+
+% [ Store information for evaluation / plotting purposes ]
+
+xstore (k+1 ,:) = xtrue ;
+xhatstore (k ,:) = xhat ;
+SigmaXstore (k ,:) = ( SigmaX (:) ) ';
+end
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+%plotting the graph
+
+subplot (1 ,2 ,1);
+plot (0: maxIter -1, xstore (1: maxIter ),'k-' ,0: maxIter -1, xhatstore ,'b--', 0: maxIter -1, xhatstore +3* sqrt ( SigmaXstore ),'m -. ' ,0: maxIter -1, xhatstore -3* sqrt ( SigmaXstore ),'m -. '); grid on;
+legend ('true ','estimate ','bounds ');
+title ('Sigma - point Kalman filter in action ');
+xlabel ('Iteration ');
+ ylabel ('State ');
+
+subplot (1 ,2 ,2);
+plot (0: maxIter -1, xstore (1: maxIter )-xhatstore ,'-' ,0: maxIter -1, 3* sqrt ( SigmaXstore ),'--' ,0: maxIter -1 , -3* sqrt ( SigmaXstore ),'--');grid on;
+legend ('Error ','bounds ' ,0); 
+title ('SPKF Error with bounds ');
+xlabel ('Iteration '); 
+ylabel ('Estimation Error ');
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%Implementing SPKF on ESC model
+
+% Load cell model , cell - test data ( incl . variable " DYNData " of which the field " script1 " is of interest ). It has sub - fields time , current , voltage , soc .
+
+load CellModel % loads " model " of cell
+load (' Cell_DYN_P25 '); % loads data from cell test
+T = 25;                                                                                                                                                                                                                                                                        % Test temperature
+time = DYNData . script1 . time (:) ; deltat = time (2) -time (1);
+time = time - time (1) ;                                                                                                                                                                                                                                     % start time at 0
+current = DYNData . script1 . current (:) ;                                                                                                                                                                                              % discharge > 0; charge < 0.
+voltage = DYNData . script1 . voltage (:) ;
+soc = DYNData . script1 . soc (:) ;
+
+% Reserve storage for computed results , for plotting
+
+sochat = zeros ( size ( soc ));
+socbound = zeros ( size ( soc ));
+
+% Covariance values
+
+SigmaX0 = diag ([1e -3 1e -3 1e -2]) ;                                                                                                                                                                                                      % uncertainty of initial state
+SigmaV = 2e -1;                                                                                                                                                                                                                                                 % uncertainty of voltage sensor , output equation
+SigmaW = 1e1;                                                                                                                                                                                                                                                   % uncertainty of current sensor , state equation
+
+% Create ekfData structure and initialize variables using first
+% voltage measurement and first temperature measurement
+
+spkfData = initSPKF ( voltage (1) ,T, SigmaX0 , SigmaV ,SigmaW , model );
+
+% Now , enter loop for remainder of time , where we update the SPKF
+% once per sample interval
+
+hwait = waitbar (0, 'Computing ... ');
+for k = 1: length ( voltage ),
+vk = voltage (k);                                                                                                                                                                                                                                              % " measure " voltage
+ik = current (k);                                                                                                                                                                                                                                                % " measure " current
+Tk = T;                                                                                                                                                                                                                                                                  % " measure " temperature
+
+% Update SOC ( and other model states )
+
+[ sochat (k),socbound (k),spkfData ] = iterSPKF (vk ,ik ,Tk , deltat , spkfData );
+
+% update waitbar periodically , but not too often ( slow procedure )
+
+if mod (k ,1000) ==0 , waitbar (k/ length ( current ),hwait ); end;
+end
+close ( hwait );
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%plotting the results.
+
+figure ; 
+plot ( time /60 ,100* sochat , time /60 ,100* soc ); hold on
+plot ([ time /60; NaN ; time /60] ,[100*( sochat + socbound ); NaN ; 100*( sochat - socbound )]);
+title ('SOC estimation using SPKF '); 
+xlabel ('Time ( min)');
+ ylabel ('SOC (%) ');
+legend ('Estimate ','Truth ','Bounds '); grid on
+fprintf ('RMS SOC estimation error = %g %%\ n',sqrt ( mean ((100*( soc - sochat )) .^2) ));
+
+figure ; 
+plot ( time /60 ,100*( soc - sochat )); hold on
+plot ([ time /60; NaN ; time /60] ,[100* socbound ; NaN ; -100* socbound ]);
+title ('SOC estimation errors using SPKF ');
+xlabel ('Time ( min)'); ylabel ('SOC error (%) '); ylim ([ -4 4]) ;
+legend ('Estimation error ','Bounds '); grid on
+ind = find ( abs (soc - sochat )>socbound );
+fprintf ('Percent of time error outside bounds = %g %%\ n' ,length (ind )/ length (soc ) *100) ;
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+%SPKF initialization code 
+
+function spkfData = initSPKF (v0 ,T0 , SigmaX0 , SigmaV ,SigmaW , model )
+
+% Initial state description
+
+ir0 = 0; spkfData . irInd = 1;
+hk0 = 0; spkfData . hkInd = 2;
+SOC0 = SOCfromOCVtemp (v0 ,T0 , model ); spkfData . zkInd = 3;
+spkfData . xhat = [ ir0 hk0 SOC0 ]';                                                                                                                                                                     % initial state
+
+% Covariance values
+
+spkfData . SigmaX = SigmaX0 ; spkfData . SigmaV = SigmaV ;
+spkfData . SigmaW = SigmaW ; spkfData . Qbump = 5;
+spkfData . Snoise = real ( chol ( diag ([ SigmaW ; SigmaV ]) ,'lower '));
+
+% previous value of current ( and its sign )
+
+spkfData . priorI = 0; 
+spkfData . signIk = 0;
+
+% SPKF specific parameters
+
+Nx = length ( spkfData . xhat ); spkfData .Nx = Nx; % state - vector length
+Ny = 1; spkfData .Ny = Ny;                                                                                                                                                                          % measurement - vector length
+Nu = 1; spkfData .Nu = Nu;                                                                                                                                                                          % input - vector length
+Nw = size ( SigmaW ,1) ; spkfData .Nw = Nw;                                                                                                                                   % process -noise - vector length
+Nv = size ( SigmaV ,1) ; spkfData .Nv = Nv;                                                                                                                                        % sensor -noise - vector length
+Na = Nx+Nw+Nv; spkfData .Na = Na;                                                                                                                                                   % augmented -state - vector length
+h = sqrt (3) ; spkfData .h = h;                                                                                                                                                                      % SPKF / CDKF tuning factor
+Weight1 = (h*h-Na)/(h*h);                                                                                                                                                                        % weighting factors when computing mean
+Weight2 = 1/(2* h*h);                                                                                                                                                                                   % and covariance
+spkfData .Wm = [ Weight1 ; Weight2 * ones (2* Na ,1) ];                                                                                                          % mean
+spkfData .Wc = spkfData .Wm;                                                                                                                                                                % covar
+
+% store model data structure too
+
+spkfData . model = model ;
+end
+
+%SPKF iteration code, load covariances/states
+
+function [zk ,zkbnd , spkfData ] = iterSPKF (vk ,ik ,Tk , deltat , spkfData )
+model = spkfData . model ;
+
+% Load the cell model parameters
+
+Q = getParamESC ('QParam ',Tk , model );
+G = getParamESC ('GParam ',Tk , model );
+M = getParamESC ('MParam ',Tk , model );
+M0 = getParamESC ('M0Param ',Tk , model );
+RC = exp(- deltat ./ abs ( getParamESC ('RCParam ',Tk , model ))) ';
+R = getParamESC ('RParam ',Tk , model ) ';
+R0 = getParamESC ('R0Param ',Tk , model );
+eta = getParamESC ('etaParam ',Tk , model );
+if ik <0, 
+ik=ik* eta ; 
+end ;
+
+%Load constants, covariances, states from prior iteration
+
+I = spkfData . priorI ;
+SigmaX = spkfData . SigmaX ;
+xhat = spkfData . xhat ;
+Nx = spkfData .Nx;
+Nw = spkfData .Nw;
+Nv = spkfData .Nv;
+Na = spkfData .Na;
+Snoise = spkfData . Snoise ;
+Wc = spkfData .Wc;
+irInd = spkfData . irInd ;
+hkInd = spkfData . hkInd ;
+zkInd = spkfData . zkInd ;
+if abs (ik)>Q/100 , spkfData . signIk = sign (ik);
+end ;
+signIk = spkfData . signIk ;
+
+% Step 1a: State estimate time update
+% - Create xhatminus augmented SigmaX points
+% - Extract xhatminus state SigmaX points
+% - Compute weighted average xhatminus (k)
+% Step 1a -1: Create augmented SigmaX and xhat
+
+[ sigmaXa ,p] = chol (SigmaX ,'lower ');
+if p >0,
+fprintf ('Cholesky error . Recovering ...\ n');
+theAbsDiag = abs ( diag ( SigmaX ));
+sigmaXa = diag ( max ( SQRT ( theAbsDiag ),SQRT ( spkfData . SigmaW )));
+end
+
+sigmaXa =[ real ( sigmaXa ) zeros ([ Nx Nw+Nv ]); zeros ([ Nw+Nv Nx ]) Snoise ];
+xhata = [ xhat ; zeros ([ Nw+Nv 1]) ];
+
+% NOTE : sigmaXa is lower - triangular
+
+% Step 1a -2: Calculate SigmaX points ( strange indexing of xhata to
+% avoid " repmat " call , which is very inefficient in MATLAB )
+
+Xa = xhata (:, ones ([1 2* Na +1]) ) + spkfData .h*[ zeros ([ Na 1]) , sigmaXa , -sigmaXa ];
+
+% Step 1a -3: Time update from last iteration until now
+% stateEqn (xold , current , xnoise )
+
+Xx = stateEqn (Xa (1: Nx ,:) ,I,Xa(Nx +1: Nx+Nw ,:) );
+xhat = Xx* spkfData .Wm;
+
+% Step 1b: Error covariance time update
+% - Compute weighted covariance sigmaminus (k)
+% ( strange indexing of xhat to avoid " repmat " call )
+
+Xs = Xx - xhat (:, ones ([1 2* Na +1]) );
+SigmaX = Xs* diag (Wc)*Xs ';
+
+% Step 1c: Output estimate
+% - Compute weighted output estimate yhat (k)
+
+I = ik; yk = vk;
+Y = outputEqn (Xx ,I,Xa(Nx+Nw +1: end ,:) ,Tk , model );
+yhat = Y* spkfData .Wm;
+
+% Step 2a: Estimator gain matrix
+
+Ys = Y - yhat (:, ones ([1 2* Na +1]) );
+SigmaXY = Xs* diag (Wc)*Ys ';
+SigmaY = Ys* diag (Wc)*Ys ';
+L = SigmaXY / SigmaY ;
+
+% Step 2b: State estimate measurement update
+
+r = yk - yhat ;                                                                                                                                                                                                                                                  % residual . Use to check for sensor errors ...
+if r^2 > 100* SigmaY , L(: ,1) =0.0; end
+xhat = xhat + L*r;
+xhat ( zkInd )= min (1.05 , max ( -0.05 , xhat ( zkInd )));
+
+% Step 2c: Error covariance measurement update
+
+SigmaX = SigmaX - L* SigmaY *L ';
+[~,S,V] = svd ( SigmaX );
+HH = V*S*V ';
+SigmaX = ( SigmaX + SigmaX ' + HH + HH ') /4;                                                                                                                                                                         % Help maintain robustness
+
+
+% Q- bump code
+
+if r^2 >4* SigmaY , % bad voltage estimate by 2- SigmaX , bump Q
+fprintf ('Bumping sigmax \n');
+SigmaX (zkInd , zkInd ) = SigmaX (zkInd , zkInd )* spkfData . Qbump ;
+end
+
+% Save data in spkfData structure for next time ...
+
+spkfData . priorI = ik;
+spkfData . SigmaX = SigmaX ;
+spkfData . xhat = xhat ;
+zk = xhat ( zkInd );
+zkbnd = 3* sqrt ( SigmaX (zkInd , zkInd ));
+
+% Calculate new states for all of the old state vectors in xold .
+
+function xnew = stateEqn (xold , current , xnoise )
+current = current + xnoise ;                                                                                                                                                                                                                 % noise adds to current
+xnew = 0* xold ;
+xnew (irInd ,:) = RC* xold (irInd ,:) + (1- RC)* current ;
+Ah = exp (- abs ( current *G* deltat /(3600* Q)));                                                                                                                                                                % hysteresis factor
+xnew (hkInd ,:) = Ah .* xold (hkInd ,:) - (1- Ah).* sign ( current );
+xnew (zkInd ,:) = xold (zkInd ,:) - current /3600/ Q;
+xnew (hkInd ,:) = min (1, max (-1, xnew (hkInd ,:) ));
+xnew (zkInd ,:) = min (1.05 , max ( -0.05 , xnew (zkInd ,:) ));
+end
+
+% Calculate cell output voltage for all of state vectors in xhat
+
+function yhat = outputEqn (xhat , current , ynoise ,T, model )
+yhat = OCVfromSOCtemp ( xhat (zkInd ,:) ,T, model );
+yhat = yhat + M* xhat (hkInd ,:) + M0* signIk ;
+yhat = yhat - R* xhat (irInd ,:) - R0* current + ynoise (1 ,:);
+end
+
+% " Safe " square root
+
+function X = SQRT (x)
+X = sqrt ( max (0,x));
+end
+end
+
+
+
+
+
+
+
+
+
